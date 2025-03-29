@@ -244,7 +244,7 @@ class LLMAgent:
             st.write(f"Calling Ollama model: {self.model}")
             if hasattr(st, 'session_state') and st.session_state.get('debug_mode', False):
                 st.write(f"Prompt length: {len(full_prompt)} characters")
-                st.write(full_prompt)
+               # st.write(full_prompt)
             
             # Make the API call with extended timeout
             response = requests.post(url, json=data, timeout=180)

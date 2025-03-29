@@ -7,7 +7,10 @@ import streamlit as st
 DEFAULT_OPENAI_MODEL = "gpt-3.5-turbo"
 DEFAULT_OLLAMA_MODEL = "gemma3:latest"
 TEMPERATURE = 0.01
+MAX_RETRIES = 3
+RETRY_DELAY = 1  # seconds
 
+# Model metadata including context window sizes
 MODEL_METADATA = {
     # OpenAI models
     "gpt-3.5-turbo": {"max_tokens": 4096},
@@ -24,23 +27,9 @@ MODEL_METADATA = {
     "llama2:latest": {"max_tokens": 4096},
     "llama3.1:latest": {"max_tokens": 4096},
     "deepseek-coder:6.7b": {"max_tokens": 16384},
-    "deepseek-coder:latest": {"max_tokens": 16384},
-    
-    # DeepSeek models
-    "deepseek-coder:6.7b": {"max_tokens": 16384},
-    "deepseek-r1:8b": {"max_tokens": 16384}
+    "nomic-embed-text:latest": {"max_tokens": 4096},
+    "deepseek-coder:latest": {"max_tokens": 16384}
 }
-"""
-Configuration settings for the Screenplay Parser App
-"""
-import streamlit as st
-
-# Constants
-DEFAULT_OPENAI_MODEL = "gpt-3.5-turbo"
-DEFAULT_OLLAMA_MODEL = "gemma3:latest"
-TEMPERATURE = 0.01
-MAX_RETRIES = 3
-RETRY_DELAY = 1  # seconds
 
 def setup_sidebar_config():
     """Set up and return the configuration from the sidebar."""
@@ -111,13 +100,29 @@ def setup_sidebar_config():
             key="ollama_model_select"
         )
 
+    # Display model metadata if available
+    if config["model"] in MODEL_METADATA:
+        max_tokens = MODEL_METADATA[config["model"]]["max_tokens"]
+        recommended_chunk = int(max_tokens * 0.7 / 4)  # Divide by 4 to convert tokens to characters (approx)
+        
+        st.sidebar.markdown(f"""
+        **Model Details**  
+        Max Token Window: {max_tokens}  
+        Recommended Chunk Size: {recommended_chunk} characters
+        """)
+        
+        # Set default parsing granularity based on model
+        default_granularity = min(max(recommended_chunk, 500), 2000)
+    else:
+        default_granularity = 700
+
     # Common processing options
     config["parsing_granularity"] = st.sidebar.slider(
         "Processing Granularity",
-        min_value=1000,
-        max_value=5000,
-        value=2000,
-        step=1000,
+        min_value=500,
+        max_value=3000,
+        value=default_granularity,
+        step=100,
         help="Number of characters to process at once. Lower values are slower but more reliable.",
         key="parsing_granularity"
     )

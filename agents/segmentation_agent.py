@@ -12,14 +12,23 @@ class DocumentSegmentationAgent(LLMAgent):
     """Agent for segmenting the document into logical parts."""
     
     def segment_document(self, text: str, chunk_size: int = 500) -> List[Dict]:
-        """Segment document by logical patterns like segment markers."""
+        """Segment document by logical patterns like segment markers with enhanced live visualization."""
+        # Create placeholder for live updates
+        status_placeholder = st.empty()
+        
+        # Create a container with fixed height for the scrollable table
+        table_container = st.container()
+        
+        # Initialize DataFrame to store processed segments
+        import pandas as pd
+        live_segments_df = pd.DataFrame(columns=["Type", "Timecode", "Speaker", "Text"])
+        
         # Try to identify segment markers (timecodes with multiple dashes)
-        # This regex looks for patterns like "00:34---------" or "**00:58---------**"
         segment_markers = re.findall(r'\d+:\d+[-]{9,}|\*\*\d+:\d+[-]{9,}', text)
         
         if segment_markers and len(segment_markers) > 3:
             # If we have segment markers, split by those
-            st.write(f"Found {len(segment_markers)} segment markers in the document.")
+            status_placeholder.write(f"Found {len(segment_markers)} segment markers in the document.")
             
             # Create a pattern that matches any of the segment marker formats
             pattern = r'(\d+:\d+[-]{9,}|\*\*\d+:\d+[-]{9,}\*\*|\*\*\d+:\d+[-]{9,}|[A-Z]\s*\d+:\d+[-]{9,})'
@@ -38,15 +47,33 @@ class DocumentSegmentationAgent(LLMAgent):
                 processed_chunks.insert(0, chunks[0])
         else:
             # Fall back to character-based chunking
-            st.write("No segment markers found. Using character-based chunking.")
+            status_placeholder.write("No segment markers found. Using character-based chunking.")
             chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
             processed_chunks = chunks
         
         all_segments = []
         segment_count = 0  # Initialize segment counter
         
+        # Display the live parsing table with a fixed height container to make it scrollable
+        with table_container:
+            # Create a container with fixed height (300px) and scrolling
+            st.markdown("""
+            <style>
+            .scrollable-table {
+                height: 500px;
+                overflow-y: auto;
+                margin-bottom: 20px;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            # Create a div with the scrollable class that will contain our table
+            st.markdown('<div class="scrollable-table">', unsafe_allow_html=True)
+            segments_table = st.empty()
+            st.markdown('</div>', unsafe_allow_html=True)
+        
         for i, chunk in enumerate(processed_chunks):
-            st.write(f"Processing chunk {i+1}/{len(processed_chunks)}...")
+            status_placeholder.write(f"Processing chunk {i+1}/{len(processed_chunks)}...")
             # Process the chunk and get segments
             segments = self._process_chunk(chunk, i)
             
@@ -57,16 +84,67 @@ class DocumentSegmentationAgent(LLMAgent):
                 if "timecode" in seg and self._is_segment_marker(seg["timecode"]):
                     segment_count += 1
                     # Add a special segment marker entry
-                    processed_segments.append({
+                    new_segment = {
                         "type": "segment_marker",
                         "timecode": seg["timecode"],
                         "segment_number": segment_count,
                         "text": ""  # Can be empty or include any text from the original
-                    })
+                    }
+                    processed_segments.append(new_segment)
+                    
+                    # Add to live visualization
+                    new_row = pd.DataFrame([{
+                        "Type": "SEGMENT MARKER",
+                        "Timecode": seg["timecode"],
+                        "Speaker": f"Segment #{segment_count}",
+                        "Text": ""
+                    }])
+                    live_segments_df = pd.concat([live_segments_df, new_row], ignore_index=True)
                 else:
                     processed_segments.append(seg)
+                    
+                    # Add to live visualization
+                    segment_type = seg.get("type", "text")
+                    if "speaker" in seg:
+                        new_row = pd.DataFrame([{
+                            "Type": segment_type.upper(),
+                            "Timecode": seg.get("timecode", ""),
+                            "Speaker": seg.get("speaker", ""),
+                            "Text": seg.get("text", "")[:80] + ("..." if len(seg.get("text", "")) > 80 else "")
+                        }])
+                        live_segments_df = pd.concat([live_segments_df, new_row], ignore_index=True)
+                    elif "text" in seg and seg.get("text", "").strip():
+                        new_row = pd.DataFrame([{
+                            "Type": segment_type.upper(),
+                            "Timecode": seg.get("timecode", ""),
+                            "Speaker": "",
+                            "Text": seg.get("text", "")[:80] + ("..." if len(seg.get("text", "")) > 80 else "")
+                        }])
+                        live_segments_df = pd.concat([live_segments_df, new_row], ignore_index=True)
+                
+                # Update the visualization (show up to 50 rows)
+                display_df = live_segments_df.tail(50).copy()
+                
+                # Apply styling to highlight different segment types
+                styled_df = display_df.style.apply(
+                    lambda x: ['background-color: #ffe0e0' if x['Type'] == 'SEGMENT MARKER' else
+                            'background-color: #e0f0ff' if x['Type'] == 'DIALOGUE' else
+                            'background-color: #e0ffe0' if x['Type'] == 'SCENE_HEADER' else
+                            '' for i in range(len(x))],
+                    axis=1
+                )
+                
+                segments_table.dataframe(styled_df, height=500)
             
             all_segments.extend(processed_segments)
+        
+        status_placeholder.write(f"Processing complete! Found {len(all_segments)} segments.")
+        
+        # Display final statistics
+        segment_markers_count = len([s for s in all_segments if s.get("type") == "segment_marker"])
+        speakers_count = len(set([s.get("speaker") for s in all_segments if "speaker" in s]))
+        
+        st.success(f"✅ Found {segment_markers_count} segment markers and {speakers_count} unique speakers")
         
         return all_segments
     

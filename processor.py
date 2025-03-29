@@ -5,9 +5,8 @@ import json
 import streamlit as st
 import pandas as pd
 import os
-import tempfile
 import re
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Callable
 from datetime import datetime
 
 # Import all agents
@@ -25,6 +24,7 @@ class ScreenplayProcessor:
         self.model = model
         self.api_key = api_key
         self.ollama_url = ollama_url
+        self.dashboard_callback = None
         
         # Initialize agents
         self.segmentation_agent = DocumentSegmentationAgent(provider, model, api_key, ollama_url)
@@ -34,11 +34,21 @@ class ScreenplayProcessor:
         
         # Initialize the DOCX export agent (doesn't require LLM parameters)
         self.docx_export_agent = DocxExportAgent()
+    
+    def set_dashboard_callback(self, callback: Callable):
+        """Set a callback function for updating the dashboard."""
+        self.dashboard_callback = callback
         
     def process_screenplay(self, text: str, chunk_size: int = 4000) -> Dict:
         """Process a screenplay through the full pipeline."""
         with st.status("Processing screenplay...", expanded=True) as status:
+            # Calculate total steps for progress tracking
+            total_steps = 4  # Segmentation, Entity Recognition, Dialogue Processing, Correction
+            current_step = 0
+            
             # Step 1: Segment the document
+            current_step += 0.25  # Starting
+            self._update_dashboard(current_step, total_steps, "Segmenting document...")
             status.update(label="Segmenting document...")
             segments = self.segmentation_agent.segment_document(text, chunk_size)
             
@@ -46,30 +56,45 @@ class ScreenplayProcessor:
                 st.error("Failed to segment document. Please try again.")
                 return {"segments": [], "entities": {}}
             
+            current_step += 0.75  # Completed segmentation
+            self._update_dashboard(current_step, total_steps, "Segmentation complete", segments)
+            
             # Step 2: Identify entities
+            current_step += 0.25  # Starting
+            self._update_dashboard(current_step, total_steps, "Identifying entities...")
             status.update(label="Identifying entities...")
             entities = self.entity_agent.identify_entities(segments)
             
+            current_step += 0.75  # Completed entity recognition
+            self._update_dashboard(current_step, total_steps, "Entity recognition complete", segments)
+            
             # Step 3: Process dialogue specifically
+            current_step += 0.25  # Starting
+            self._update_dashboard(current_step, total_steps, "Processing dialogue...")
             status.update(label="Processing dialogue...")
-            dialogue_segments = [s for s in segments if s.get("type") == "dialogue"]
+            dialogue_segments = [s for s in segments if s.get("type") == "dialogue" or "speaker" in s]
             processed_dialogue = self.dialogue_agent.process_dialogue(dialogue_segments)
             
             # Update the original segments with processed dialogue
-            non_dialogue_segments = [s for s in segments if s.get("type") != "dialogue"]
+            non_dialogue_segments = [s for s in segments if s.get("type") != "dialogue" and "speaker" not in s]
             updated_segments = non_dialogue_segments + processed_dialogue
             
+            current_step += 0.75  # Completed dialogue processing
+            self._update_dashboard(current_step, total_steps, "Dialogue processing complete", updated_segments)
+            
             # Step 4: Correct any remaining inconsistencies
+            current_step += 0.25  # Starting
+            self._update_dashboard(current_step, total_steps, "Correcting inconsistencies...")
             status.update(label="Correcting inconsistencies...")
             corrected_segments = self.correction_agent.correct_inconsistencies(updated_segments, entities)
             
             # Log the segment count after processing
-            # Count segment markers - make regex more inclusive
-            segment_markers = len([s for s in segments if 
-                                s.get("type") == "segment_marker" or 
-                                (s.get("timecode") and re.search(r'[\d:]+[-]{5,}', s.get("timecode", "")))])
+            segment_markers = len([s for s in corrected_segments if s.get("type") == "segment_marker" or 
+                                  (s.get("timecode") and self._is_segment_marker(s.get("timecode")))])
             st.write(f"Found {segment_markers} segment markers in the screenplay")
             
+            current_step += 0.75  # Completed correction
+            self._update_dashboard(current_step, total_steps, "Processing complete!", corrected_segments)
             status.update(label="Processing complete!", state="complete")
             
         return {
@@ -77,16 +102,23 @@ class ScreenplayProcessor:
             "entities": entities
         }
     
+    def _update_dashboard(self, current_step, total_steps, message, segments=None):
+        """Update the dashboard if a callback is set."""
+        if self.dashboard_callback:
+            self.dashboard_callback(current_step, total_steps, message, segments)
+    
     def _is_segment_marker(self, timecode: str) -> bool:
         """Helper method to check if a timecode represents a segment marker."""
-        import re
+        if not isinstance(timecode, str):
+            return False
+            
         return bool(re.search(r'\*?\*?[\d:]+[-]{5,}', timecode) or 
-                   (timecode and len(timecode.strip()) >= 4 and '-' in timecode and ':' in timecode))
+                  (timecode and len(timecode.strip()) >= 4 and '-' in timecode and ':' in timecode))
     
     def export_to_docx(self, result: Dict, output_path: Optional[str] = None, episode_number: Optional[str] = None) -> str:
         """Export the processed screenplay to a formatted DOCX file."""
         try:
-            st.write("📊 Starting DOCX export process...")
+            self._update_dashboard(0, 1, "Starting DOCX export...")
             
             # If no output path provided, create one in the temp directory
             if not output_path:
@@ -94,47 +126,44 @@ class ScreenplayProcessor:
                 # Create temp file with correct extension
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as temp_file:
                     output_path = temp_file.name
-                st.write(f"📁 Created temporary file: {output_path}")
+                st.write(f"Created temporary file: {output_path}")
             
             # Get the segments from the result
             segments = result.get("segments", [])
             
             # Check if we found any segments
             if not segments:
-                st.error("❌ No segments found to export.")
+                st.error("No segments found to export.")
                 return ""
             
-            st.write(f"📊 Found {len(segments)} segments to export")
+            self._update_dashboard(0.2, 1, f"Exporting {len(segments)} segments to DOCX...")
             
             # Use the DOCX export agent to create the document
-            st.write(f"📝 Calling DOCX export agent to create document at: {output_path}")
             docx_path = self.docx_export_agent.export_to_docx(segments, output_path, episode_number)
             
             if not docx_path:
-                st.error("❌ Failed to create DOCX file. See errors above for details.")
+                st.error("Failed to create DOCX file. See errors above for details.")
                 return ""
                 
             # Check if file exists and has content
             if os.path.exists(docx_path):
                 file_size = os.path.getsize(docx_path)
-                st.write(f"📊 Created file size: {file_size} bytes")
+                st.write(f"Created file size: {file_size} bytes")
                 if file_size > 0:
-                    st.success(f"✅ Successfully exported to DOCX: {docx_path}")
+                    self._update_dashboard(1, 1, f"Export complete: {docx_path}")
+                    st.success(f"Successfully exported to DOCX: {docx_path}")
                 else:
-                    st.warning(f"⚠️ File was created but is empty: {docx_path}")
+                    st.warning(f"File was created but is empty: {docx_path}")
             else:
-                st.error(f"❌ File was not created at the expected location: {docx_path}")
+                st.error(f"File was not created at the expected location: {docx_path}")
                 
             return docx_path
         except Exception as e:
-            st.error(f"❌ Error in export_to_docx: {str(e)}")
+            st.error(f"Error in export_to_docx: {str(e)}")
             import traceback
             st.error(traceback.format_exc())
             return ""
     
-        """
-    Function to generate summary with improved segment and character counting
-    """
     def generate_summary(self, result: Dict) -> Dict:
         """Generate a summary of the screenplay with improved entity counting."""
         segments = result.get("segments", [])
@@ -166,9 +195,10 @@ class ScreenplayProcessor:
             elif "speaker" in segment:
                 speaker = segment.get("speaker", "")
                 # Remove audio notation for counting
-                speaker = re.sub(r'\([^)]*\)', '', speaker).strip()
-                if speaker:
-                    character_dialogue[speaker] = character_dialogue.get(speaker, 0) + 1
+                if isinstance(speaker, str):
+                    speaker = re.sub(r'\([^)]*\)', '', speaker).strip()
+                    if speaker:
+                        character_dialogue[speaker] = character_dialogue.get(speaker, 0) + 1
         
         st.write(f"Found {len(character_dialogue)} characters with dialogue")
         
@@ -187,7 +217,7 @@ class ScreenplayProcessor:
             if s.get("type") == "segment_marker":
                 segment_markers.append(s)
             # Check if it has a timecode with dashes pattern
-            elif "timecode" in s and re.search(r'[\d:]+[-]{5,}', s.get("timecode", "")):
+            elif "timecode" in s and isinstance(s.get("timecode"), str) and re.search(r'[\d:]+[-]{5,}', s.get("timecode", "")):
                 segment_markers.append(s)
         
         st.write(f"Found {len(segment_markers)} segment markers")
@@ -203,12 +233,13 @@ class ScreenplayProcessor:
             locations = set()
             for scene in scenes:
                 text = scene.get("text", "")
-                # Try to extract location after INT/EXT
-                loc_match = re.search(r'(?:INT|EXT)\.?\s*[-–—]?\s*(.*?)(?:\s*[-–—]\s*|$)', text, re.IGNORECASE)
-                if loc_match:
-                    location = loc_match.group(1).strip()
-                    if location:
-                        locations.add(location)
+                if isinstance(text, str):
+                    # Try to extract location after INT/EXT
+                    loc_match = re.search(r'(?:INT|EXT)\.?\s*[-–—]?\s*(.*?)(?:\s*[-–—]\s*|$)', text, re.IGNORECASE)
+                    if loc_match:
+                        location = loc_match.group(1).strip()
+                        if location:
+                            locations.add(location)
             location_count = len(locations)
         
         return {
@@ -219,7 +250,6 @@ class ScreenplayProcessor:
             "location_count": location_count,
             "segment_marker_count": len(segment_markers)
         }
-        
         
     def export_json(self, result: Dict) -> str:
         """Export the screenplay analysis to JSON."""
@@ -233,26 +263,35 @@ class ScreenplayProcessor:
         dataframes = {}
         
         # Dialogue dataframe
-        dialogue_segments = [s for s in segments if s.get("type") == "dialogue"]
+        dialogue_segments = [s for s in segments if s.get("type") == "dialogue" or "speaker" in s]
         if dialogue_segments:
             dialogue_df = pd.DataFrame(dialogue_segments)
             dataframes["dialogue"] = dialogue_df
             
         # Scene header dataframe
-        scene_segments = [s for s in segments if s.get("type") == "scene_header"]
+        scene_segments = [s for s in segments if s.get("type") == "scene_header" or (
+            isinstance(s.get("text", ""), str) and (
+                s.get("text", "").upper().startswith("INT") or 
+                s.get("text", "").upper().startswith("EXT")
+            )
+        )]
         if scene_segments:
             scene_df = pd.DataFrame(scene_segments)
             dataframes["scenes"] = scene_df
             
         # Title dataframe
-        title_segments = [s for s in segments if s.get("type") == "title"]
+        title_segments = [s for s in segments if s.get("type") == "title" or (
+            isinstance(s.get("text", ""), str) and 
+            s.get("text", "").upper().startswith("TITULOK")
+        )]
         if title_segments:
             title_df = pd.DataFrame(title_segments)
             dataframes["titles"] = title_df
             
         # Segment markers dataframe
-        segment_markers = [s for s in segments if s.get("type") == "segment_marker" or 
-                          (s.get("timecode") and self._is_segment_marker(s.get("timecode")))]
+        segment_markers = [s for s in segments if s.get("type") == "segment_marker" or (
+            "timecode" in s and isinstance(s.get("timecode"), str) and re.search(r'[\d:]+[-]{5,}', s.get("timecode", ""))
+        )]
         if segment_markers:
             markers_df = pd.DataFrame(segment_markers)
             dataframes["segments"] = markers_df
