@@ -96,25 +96,45 @@ class EntityRecognitionAgent(LLMAgent):
         for segment in segments:
             # Get characters from speaker field
             if "speaker" in segment:
-                # Extract speaker name, removing audio notations
-                speaker = re.sub(r'\([^)]*\)', '', segment.get("speaker", "")).strip()
-                if speaker:
-                    characters.add(speaker)
+                # Handle case where speaker might be a list
+                speaker_data = segment.get("speaker", "")
+                if isinstance(speaker_data, list):
+                    # Process each speaker in the list
+                    for sp in speaker_data:
+                        if isinstance(sp, str):
+                            # Extract speaker name, removing audio notations
+                            clean_speaker = re.sub(r'\([^)]*\)', '', sp).strip()
+                            if clean_speaker:
+                                characters.add(clean_speaker)
+                elif isinstance(speaker_data, str):
+                    # Process single speaker string
+                    clean_speaker = re.sub(r'\([^)]*\)', '', speaker_data).strip()
+                    if clean_speaker:
+                        characters.add(clean_speaker)
             
             # Get characters from character field
             if "character" in segment:
-                character = re.sub(r'\([^)]*\)', '', segment.get("character", "")).strip()
-                if character:
-                    characters.add(character)
+                character_data = segment.get("character", "")
+                if isinstance(character_data, list):
+                    for ch in character_data:
+                        if isinstance(ch, str):
+                            clean_character = re.sub(r'\([^)]*\)', '', ch).strip()
+                            if clean_character:
+                                characters.add(clean_character)
+                elif isinstance(character_data, str):
+                    clean_character = re.sub(r'\([^)]*\)', '', character_data).strip()
+                    if clean_character:
+                        characters.add(clean_character)
             
             # Check text for potential ALL CAPS character names
             if "text" in segment:
                 text = segment.get("text", "")
-                # Find words in ALL CAPS that might be character names (4+ letters)
-                caps_words = re.findall(r'\b[A-Z]{4,}[A-Z]*\b', text)
-                for word in caps_words:
-                    if len(word) >= 4 and word not in ["INT", "EXT", "TITLE", "TITULOK"]:
-                        characters.add(word)
+                if isinstance(text, str):
+                    # Find words in ALL CAPS that might be character names (4+ letters)
+                    caps_words = re.findall(r'\b[A-Z]{4,}[A-Z]*\b', text)
+                    for word in caps_words:
+                        if len(word) >= 4 and word not in ["INT", "EXT", "TITLE", "TITULOK"]:
+                            characters.add(word)
         
         # Remove any empty strings
         if "" in characters:
@@ -128,17 +148,18 @@ class EntityRecognitionAgent(LLMAgent):
         
         for segment in segments:
             if segment.get("type") == "scene_header" or (
-                "text" in segment and 
+                "text" in segment and isinstance(segment.get("text", ""), str) and 
                 (segment.get("text", "").upper().startswith("INT") or 
                 segment.get("text", "").upper().startswith("EXT"))
             ):
                 text = segment.get("text", "")
-                # Try to extract location after INT/EXT
-                loc_match = re.search(r'(?:INT|EXT)\.?\s*[-–—]?\s*(.*?)(?:\s*[-–—]\s*|$)', text, re.IGNORECASE)
-                if loc_match:
-                    location = loc_match.group(1).strip()
-                    if location:
-                        locations.add(location)
+                if isinstance(text, str):
+                    # Try to extract location after INT/EXT
+                    loc_match = re.search(r'(?:INT|EXT)\.?\s*[-–—]?\s*(.*?)(?:\s*[-–—]\s*|$)', text, re.IGNORECASE)
+                    if loc_match:
+                        location = loc_match.group(1).strip()
+                        if location:
+                            locations.add(location)
         
         return locations
     
@@ -158,14 +179,23 @@ class EntityRecognitionAgent(LLMAgent):
         # Look for notation patterns in segments
         for segment in segments:
             if "speaker" in segment:
-                speaker = segment.get("speaker", "")
-                # Find notation in parentheses
-                notation_match = re.search(r'\(([^)]+)\)', speaker)
-                if notation_match:
-                    notation = notation_match.group(1).strip()
-                    if notation not in notations:
-                        # Use common definition if available, otherwise generic
-                        notations[notation] = common_notations.get(notation, f"Audio notation for special delivery")
+                speaker_data = segment.get("speaker", "")
+                if isinstance(speaker_data, str):
+                    # Find notation in parentheses
+                    notation_match = re.search(r'\(([^)]+)\)', speaker_data)
+                    if notation_match:
+                        notation = notation_match.group(1).strip()
+                        if notation not in notations:
+                            # Use common definition if available, otherwise generic
+                            notations[notation] = common_notations.get(notation, f"Audio notation for special delivery")
+                elif isinstance(speaker_data, list):
+                    for speaker in speaker_data:
+                        if isinstance(speaker, str):
+                            notation_match = re.search(r'\(([^)]+)\)', speaker)
+                            if notation_match:
+                                notation = notation_match.group(1).strip()
+                                if notation not in notations:
+                                    notations[notation] = common_notations.get(notation, f"Audio notation for special delivery")
         
         # If we didn't find any, return some common ones
         if not notations:

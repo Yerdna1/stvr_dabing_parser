@@ -62,14 +62,17 @@ def setup_sidebar_config():
         config["ollama_url"] = st.sidebar.text_input("Ollama URL", value="http://localhost:11434", key="ollama_url")
         config["model"] = st.sidebar.selectbox(
             "Model", 
-            [
-                "gemma3:latest", 
+            [   
+                "gemma:2b",
+                "gemma3:latest",
+                "gemma3:27b",
+                "qwq:latest",
                 "deepseek-r1:8b",
-                "mistral:latest", 
-                "llama2:latest", 
-                "llama3.1:latest", 
-                "deepseek-coder:6.7b", 
-                "nomic-embed-text:latest", 
+                "mistral:latest",
+                "llama2:latest",
+                "llama3.1:latest",
+                "deepseek-coder:6.7b",
+                "nomic-embed-text:latest",
                 "deepseek-coder:latest"
             ],
             index=0,
