@@ -57,6 +57,7 @@ class LLMAgent:
 
     // Return a JSON array with parsed elements (scene headers, dialogue, etc.)
     // IMPORTANT: The response MUST be a valid, complete JSON array
+    // IMPORTANT: Support full UTF-8 encoding for Slovak characters (č, ď, ľ, š, ť, ž, ý, á, í, é, etc.)
     return [
         // Example format - to be replaced with actual parsed content:
         {{
@@ -68,7 +69,7 @@ class LLMAgent:
         "type": "dialogue",
         "character": "CHARACTER_NAME",
         "audio_type": "VO",
-        "text": "Dialogue text"
+        "text": "Dialogue text with Slovak characters: čšťžýáíéľďň"
         }}
     ];
     }}
@@ -82,9 +83,9 @@ class LLMAgent:
                 full_prompt = code_prompt
             else:
                 if system_prompt:
-                    full_prompt = f"System: {system_prompt}\n\nUser: {prompt}\n\nRespond with JSON only."
+                    full_prompt = f"System: {system_prompt}\n\nUser: {prompt}\n\nImportant: Support full UTF-8 encoding for Slovak characters (č, ď, ľ, š, ť, ž, ý, á, í, é, etc.). Respond with JSON only."
                 else:
-                    full_prompt = f"User: {prompt}\n\nRespond with JSON only."
+                    full_prompt = f"User: {prompt}\n\nImportant: Support full UTF-8 encoding for Slovak characters (č, ď, ľ, š, ť, ž, ý, á, í, é, etc.). Respond with JSON only."
             
             data = {
                 "model": self.model,
@@ -178,7 +179,10 @@ class LLMAgent:
         
         messages = []
         if system_prompt:
+            system_prompt += "\n\nImportant: Always preserve and support full UTF-8 encoding for Slovak characters (č, ď, ľ, š, ť, ž, ý, á, í, é, etc.)."
             messages.append({"role": "system", "content": system_prompt})
+        else:
+            messages.append({"role": "system", "content": "Support full UTF-8 encoding for Slovak characters (č, ď, ľ, š, ť, ž, ý, á, í, é, etc.)."})
         
         messages.append({"role": "user", "content": prompt})
         
@@ -200,6 +204,8 @@ class LLMAgent:
                 # Use a clear separator between system prompt and user prompt
                 full_prompt = f"""SYSTEM INSTRUCTION:
     {system_prompt}
+    
+    Important: Support full UTF-8 encoding for Slovak characters (č, ď, ľ, š, ť, ž, ý, á, í, é, etc.).
 
     USER:
     {prompt}
@@ -216,7 +222,7 @@ class LLMAgent:
         "type": "dialogue",
         "character": "CHARACTER_NAME",
         "audio_type": "VO",
-        "text": "Dialogue text"
+        "text": "Dialogue text with Slovak characters: čšťžýáíéľďň"
     }}
     ]
     """
@@ -224,6 +230,7 @@ class LLMAgent:
                 full_prompt = f"""USER:
     {prompt}
 
+    IMPORTANT: Support full UTF-8 encoding for Slovak characters (č, ď, ľ, š, ť, ž, ý, á, í, é, etc.).
     IMPORTANT: Respond with valid, parseable JSON only. No explanations or other text.
     """
                 
@@ -237,6 +244,7 @@ class LLMAgent:
             st.write(f"Calling Ollama model: {self.model}")
             if hasattr(st, 'session_state') and st.session_state.get('debug_mode', False):
                 st.write(f"Prompt length: {len(full_prompt)} characters")
+                st.write(full_prompt)
             
             # Make the API call with extended timeout
             response = requests.post(url, json=data, timeout=180)

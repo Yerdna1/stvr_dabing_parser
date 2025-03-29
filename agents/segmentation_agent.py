@@ -12,21 +12,33 @@ class DocumentSegmentationAgent(LLMAgent):
     """Agent for segmenting the document into logical parts."""
     
     def segment_document(self, text: str, chunk_size: int = 500) -> List[Dict]:
-        """Segment document by logical patterns like scene markers."""
-        # Try to identify scene markers or logical breaks
-        scene_markers = re.findall(r'\*\*[A-Z]+\.\*\* --', text)
+        """Segment document by logical patterns like segment markers."""
+        # Try to identify segment markers (timecodes with multiple dashes)
+        # This regex looks for patterns like "00:34---------" or "**00:58---------**"
+        segment_markers = re.findall(r'\d+:\d+[-]{9,}|\*\*\d+:\d+[-]{9,}', text)
         
-        if scene_markers and len(scene_markers) > 5:
-            # If we have scene markers, split by those
-            chunks = re.split(r'(\*\*[A-Z]+\.\*\* --)', text)
+        if segment_markers and len(segment_markers) > 3:
+            # If we have segment markers, split by those
+            st.write(f"Found {len(segment_markers)} segment markers in the document.")
+            
+            # Create a pattern that matches any of the segment marker formats
+            pattern = r'(\d+:\d+[-]{9,}|\*\*\d+:\d+[-]{9,}\*\*|\*\*\d+:\d+[-]{9,}|[A-Z]\s*\d+:\d+[-]{9,})'
+            chunks = re.split(pattern, text)
             processed_chunks = []
             
             # Recombine the splits to keep the markers with their content
-            for i in range(1, len(chunks), 2):
-                if i < len(chunks) - 1:
-                    processed_chunks.append(chunks[i] + chunks[i+1])
+            for i in range(0, len(chunks)-1, 2):
+                if i+1 < len(chunks):
+                    marker = chunks[i+1] if i+1 < len(chunks) else ""
+                    content = chunks[i+2] if i+2 < len(chunks) else ""
+                    processed_chunks.append(marker + content)
+            
+            # Don't forget the first chunk if it exists
+            if chunks[0]:
+                processed_chunks.insert(0, chunks[0])
         else:
-            # Fall back to character-based chunking but with smaller size
+            # Fall back to character-based chunking
+            st.write("No segment markers found. Using character-based chunking.")
             chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
             processed_chunks = chunks
         
@@ -59,9 +71,33 @@ class DocumentSegmentationAgent(LLMAgent):
         return all_segments
     
     def _is_segment_marker(self, timecode: str) -> bool:
-        """Determine if a timecode represents a segment marker (contains multiple dashes)."""
-        # Check for patterns like "**06:12\\-\\-\\-\\-\\-\\-\\-\\-\\--**" or similar
-        return bool(re.search(r'\*?\*?[\d:]+[-]{5,}', timecode))
+        """Determine if a timecode represents a segment marker (contains multiple dashes).
+        
+        In our screenplay format, segment markers typically look like:
+        "00:34---------", "**00:58---------**", "A 01:23---------"
+        with a timecode followed by at least 9 dashes.
+        """
+        # Primary pattern: digits:digits followed by at least 9 dashes
+        if re.search(r'\d+:\d+[-]{9,}', timecode):
+            return True
+            
+        # Alternative pattern with asterisks: **digits:digits followed by at least 9 dashes
+        if re.search(r'\*\*\d+:\d+[-]{9,}', timecode):
+            return True
+            
+        # Alternative pattern for longer timecodes: digits:digits:digits followed by at least 9 dashes
+        if re.search(r'\d+:\d+:\d+[-]{9,}', timecode):
+            return True
+            
+        # Alternative pattern with A, B, C markers: [A-Z]digits:digits followed by at least 9 dashes
+        if re.search(r'[A-Z]\s*\d+:\d+[-]{9,}', timecode):
+            return True
+            
+        # For backward compatibility - old pattern with at least 5 dashes
+        if re.search(r'\*?\*?[\d:]+[-]{5,}', timecode):
+            return True
+            
+        return False
     
     def _process_chunk(self, text: str, chunk_index: int) -> List[Dict]:
         """Process a single chunk of text with robust JSON parsing."""
