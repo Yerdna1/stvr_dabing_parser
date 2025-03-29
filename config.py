@@ -7,6 +7,38 @@ import streamlit as st
 DEFAULT_OPENAI_MODEL = "gpt-3.5-turbo"
 DEFAULT_OLLAMA_MODEL = "gemma3:latest"
 TEMPERATURE = 0.01
+
+MODEL_METADATA = {
+    # OpenAI models
+    "gpt-3.5-turbo": {"max_tokens": 4096},
+    "gpt-4": {"max_tokens": 8192},
+    "gpt-4-turbo": {"max_tokens": 128000},
+    
+    # Ollama models
+    "gemma:2b": {"max_tokens": 8192},
+    "gemma3:latest": {"max_tokens": 8192},
+    "gemma3:27b": {"max_tokens": 8192},
+    "qwq:latest": {"max_tokens": 4096},
+    "deepseek-r1:8b": {"max_tokens": 16384},
+    "mistral:latest": {"max_tokens": 4096},
+    "llama2:latest": {"max_tokens": 4096},
+    "llama3.1:latest": {"max_tokens": 4096},
+    "deepseek-coder:6.7b": {"max_tokens": 16384},
+    "deepseek-coder:latest": {"max_tokens": 16384},
+    
+    # DeepSeek models
+    "deepseek-coder:6.7b": {"max_tokens": 16384},
+    "deepseek-r1:8b": {"max_tokens": 16384}
+}
+"""
+Configuration settings for the Screenplay Parser App
+"""
+import streamlit as st
+
+# Constants
+DEFAULT_OPENAI_MODEL = "gpt-3.5-turbo"
+DEFAULT_OLLAMA_MODEL = "gemma3:latest"
+TEMPERATURE = 0.01
 MAX_RETRIES = 3
 RETRY_DELAY = 1  # seconds
 
