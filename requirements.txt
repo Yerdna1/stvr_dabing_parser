@@ -6,5 +6,5 @@ requests
 python-docx
 pydantic>=2.0.0
 pydantic-ai
-
+json5
 docling>=0.1.0

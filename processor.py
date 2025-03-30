@@ -6,10 +6,16 @@ import streamlit as st
 import pandas as pd
 import os
 import re
+import tempfile
 import json5  # More lenient JSON parser
+# import docling # Import docling - Commented out as library usage is unclear/non-functional
+import logging # Import logging
 from typing import Dict, List, Any, Optional, Callable
 from datetime import datetime
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
+# Setup basic logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Import all agents
 from agents.correction_agent import CorrectionAgent
@@ -21,6 +27,47 @@ from agents.docx_export_agent import DocxExportAgent
 class ScreenplayProcessor:
     """Main processor that orchestrates the agents to parse and analyze a screenplay."""
     
+    @retry(stop=stop_after_attempt(3),
+           wait=wait_exponential(multiplier=1, min=2, max=10),
+           retry=retry_if_exception_type(json.JSONDecodeError))
+    def parse_with_retry(self, json_str: str) -> List[Dict]:
+        """Parse JSON with validation, repair, and logging."""
+        logging.info("Attempting to parse JSON string.")
+        # Log first 500 chars for brevity
+        logging.debug(f"Input JSON string (first 500 chars): {json_str[:500]}")
+        try:
+            # First try strict parsing
+            result = json.loads(json_str)
+            logging.info("Successfully parsed with standard json.loads.")
+            return result
+        except json.JSONDecodeError as e:
+            logging.warning(f"Standard json.loads failed: {e}. Trying json5.")
+            # Try more lenient parsing with json5
+            try:
+                result = json5.loads(json_str)
+                logging.info("Successfully parsed with json5.loads.")
+                return result
+            except Exception as e5: # Catch broader exceptions from json5
+                logging.warning(f"json5.loads failed: {e5}. Attempting basic repairs.")
+                # Attempt basic repairs for common LLM response issues
+                repaired = json_str
+                try:
+                    # Repair 1: Remove text between arrays ]...[
+                    repaired = re.sub(r'(?<=\])(.*?)(?=\[)', '', repaired)
+                    # Repair 2: Remove trailing commas before }
+                    repaired = re.sub(r',\s*?}', '}', repaired)
+                    # Repair 3: Remove trailing commas before ]
+                    repaired = re.sub(r',\s*?\]', ']', repaired)
+                    logging.debug(f"Repaired JSON string (first 500 chars): {repaired[:500]}")
+                    result = json5.loads(repaired)
+                    logging.info("Successfully parsed repaired JSON with json5.loads.")
+                    return result
+                except Exception as e_repair:
+                    logging.error(f"Failed to parse even after repairs: {e_repair}")
+                    logging.error(f"Original JSON (first 500): {json_str[:500]}")
+                    logging.error(f"Repaired JSON (first 500): {repaired[:500]}")
+                    # Re-raise the original error or a custom one if preferred
+                    raise json.JSONDecodeError(f"Failed to parse JSON even with json5 and repairs: {e_repair}", json_str, 0) from e_repair
     def __init__(self, provider: str, model: str, api_key: Optional[str] = None, ollama_url: Optional[str] = None):
         self.provider = provider
         self.model = model
@@ -29,9 +76,9 @@ class ScreenplayProcessor:
         self.dashboard_callback = None
         
         # Initialize agents
-        # Initialize agents with retry capabilities
+        # Initialize agents
         self.segmentation_agent = DocumentSegmentationAgent(provider, model, api_key, ollama_url)
-        self.segmentation_agent.segment_document = self.retry_parse(self.segmentation_agent.segment_document)
+        # Note: Retry logic for segmentation should be handled within the agent or by calling parse_with_retry if applicable.
         
         self.entity_agent = EntityRecognitionAgent(provider, model, api_key, ollama_url)
         self.dialogue_agent = DialogueProcessingAgent(provider, model, api_key, ollama_url)
@@ -258,7 +305,13 @@ class ScreenplayProcessor:
         
     def export_json(self, result: Dict) -> str:
         """Export the screenplay analysis to JSON."""
-        return json.dumps(result, ensure_ascii=False, indent=2)
+        class DateTimeEncoder(json.JSONEncoder):
+            def default(self, o):
+                if isinstance(o, datetime):
+                    return o.isoformat()
+                return super().default(o)
+        
+        return json.dumps(result, cls=DateTimeEncoder, ensure_ascii=False, indent=2)
     
 class EnhancedScreenplayProcessor(ScreenplayProcessor):
     """Extended processor with Docling integration and dashboard support."""
@@ -270,9 +323,49 @@ class EnhancedScreenplayProcessor(ScreenplayProcessor):
     def process_screenplay(self, text: str, chunk_size: int = 4000) -> Dict:
         """Process screenplay with Docling-enhanced segmentation if enabled."""
         if self.use_docling:
-            # Add Docling preprocessing steps here
-            pass
-        return super().process_screenplay(text, chunk_size)
+            # --- Docling Integration (Commented Out) ---
+            # The correct usage pattern for the 'docling' library is unknown.
+            # The following code is commented out to prevent errors until the
+            # correct import and function/method calls are determined.
+            logging.warning("Docling integration is enabled but commented out due to unknown usage pattern.")
+            st.warning("Docling processing is currently disabled. Falling back to standard segmentation.")
+            # try:
+            #     logging.info("Processing screenplay using Docling for initial segmentation.")
+            #     # --- Docling Integration ---
+            #     # Replace this with the actual docling API call when known
+            #     logging.info(f"Calling docling.parse() on text (length: {len(text)})...")
+            #     docling_segments = docling.parse(text) # Example call (likely incorrect)
+            #     logging.info(f"Docling returned {len(docling_segments)} segments.")
+            #     logging.debug(f"First few Docling segments: {docling_segments[:3]}") # Log first few segments
+            #
+            #     # --- Integrate Docling results ---
+            #     # Replace the LLM-based segmentation step with Docling's output
+            #     with st.status("Processing screenplay (using Docling)...", expanded=True) as status:
+            #         # ... [Rest of the processing steps using docling_segments] ...
+            #         pass # Placeholder for the rest of the steps
+            #
+            #     return {
+            #         "segments": corrected_segments, # Replace with actual result
+            #         "entities": entities # Replace with actual result
+            #     }
+            #
+            # except AttributeError as ae:
+            #      logging.error(f"AttributeError during Docling processing: {ae}. Is 'docling.parse()' the correct usage?", exc_info=True)
+            #      st.error(f"Docling integration error: {ae}. Check library usage.")
+            #      return {"segments": [], "entities": {}, "error": str(ae)}
+            # except Exception as e:
+            #     logging.error(f"General error during Docling processing: {e}", exc_info=True)
+            #     st.error(f"An error occurred during Docling processing: {e}")
+            #     return {"segments": [], "entities": {}, "error": str(e)}
+            # --- End of Commented Out Section ---
+
+            # Fallback to standard processing since Docling part is commented out
+            logging.info("Falling back to standard LLM segmentation as Docling code is commented out.")
+            return super().process_screenplay(text, chunk_size)
+        else:
+            # If not using docling, call the original method from the parent class
+            logging.info("Processing screenplay using standard LLM segmentation.")
+            return super().process_screenplay(text, chunk_size)
     
     def set_dashboard_callback(self, callback: Callable):
         """Set up real-time dashboard updates."""
