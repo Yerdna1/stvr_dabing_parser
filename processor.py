@@ -6,8 +6,10 @@ import streamlit as st
 import pandas as pd
 import os
 import re
+import json5  # More lenient JSON parser
 from typing import Dict, List, Any, Optional, Callable
 from datetime import datetime
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Import all agents
 from agents.correction_agent import CorrectionAgent
@@ -27,7 +29,10 @@ class ScreenplayProcessor:
         self.dashboard_callback = None
         
         # Initialize agents
+        # Initialize agents with retry capabilities
         self.segmentation_agent = DocumentSegmentationAgent(provider, model, api_key, ollama_url)
+        self.segmentation_agent.segment_document = self.retry_parse(self.segmentation_agent.segment_document)
+        
         self.entity_agent = EntityRecognitionAgent(provider, model, api_key, ollama_url)
         self.dialogue_agent = DialogueProcessingAgent(provider, model, api_key, ollama_url)
         self.correction_agent = CorrectionAgent(provider, model, api_key, ollama_url)
@@ -255,6 +260,24 @@ class ScreenplayProcessor:
         """Export the screenplay analysis to JSON."""
         return json.dumps(result, ensure_ascii=False, indent=2)
     
+class EnhancedScreenplayProcessor(ScreenplayProcessor):
+    """Extended processor with Docling integration and dashboard support."""
+    
+    def __init__(self, *args, use_docling: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.use_docling = use_docling
+    
+    def process_screenplay(self, text: str, chunk_size: int = 4000) -> Dict:
+        """Process screenplay with Docling-enhanced segmentation if enabled."""
+        if self.use_docling:
+            # Add Docling preprocessing steps here
+            pass
+        return super().process_screenplay(text, chunk_size)
+    
+    def set_dashboard_callback(self, callback: Callable):
+        """Set up real-time dashboard updates."""
+        self.dashboard_callback = callback
+
     def export_csv(self, result: Dict) -> Dict[str, pd.DataFrame]:
         """Export the screenplay analysis to CSV dataframes."""
         segments = result.get("segments", [])

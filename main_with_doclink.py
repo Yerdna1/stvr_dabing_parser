@@ -12,7 +12,8 @@ from datetime import datetime
 
 from config import setup_sidebar_config
 from file_utils import read_file
-from main_with_doclink import EnhancedScreenplayProcessor
+from processor import EnhancedScreenplayProcessor
+
 
 # Configure page
 st.title("🎬 Enhanced Screenplay Parser with Docling")
