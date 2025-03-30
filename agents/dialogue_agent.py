@@ -108,9 +108,11 @@ class DialogueProcessingAgent(LLMAgent):
                         # Ensure text is not None
                         elif segment.get("text") is None:
                             segment["text"] = ""
-                        
-                        # Ensure speaker consistency
-                        if "speaker" in segment and isinstance(segment["speaker"], str):
+
+                        # Ensure speaker key exists and is consistent
+                        if "speaker" not in segment or segment.get("speaker") is None:
+                             segment["speaker"] = "" # Add empty speaker if missing or None
+                        elif isinstance(segment["speaker"], str):
                             # Clean up speaker name if needed
                             speaker = segment["speaker"].strip()
                             # Make sure audio notations are properly formatted

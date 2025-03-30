@@ -2,13 +2,15 @@
 Base LLM Agent class for the Screenplay Parser App
 """
 import logging # Ensure logging is imported
-import logging
 import re
 import json
 import time
 import requests
 import streamlit as st
+import openai
+import unicodedata
 from typing import Optional, Dict, List, Any, Type, TypeVar, Union
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from config import MAX_RETRIES, RETRY_DELAY, TEMPERATURE
 from models import BaseSegment, ProcessedSegment, Entities
@@ -48,6 +50,46 @@ class LLMAgent:
                     st.error(f"Error calling LLM: {str(e)}")
                     return ""
 
+    @retry(stop=stop_after_attempt(3), 
+           wait=wait_exponential(multiplier=1, min=2, max=10),
+           retry=retry_if_exception_type(json.JSONDecodeError))
+    def _parse_json_with_retry(self, json_str: str) -> Any:
+        """Parse JSON with retries and error handling."""
+        try:
+            # Try standard JSON parse first
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            # If that fails, try to fix common issues and retry
+            logging.warning(f"Initial JSON parsing failed: {str(e)}. Attempting to fix JSON.")
+            fixed_json = self._fix_json_string(json_str)
+            logging.info(f"Repaired JSON (first 100 chars): {fixed_json[:100]}")
+            return json.loads(fixed_json)
+
+    def _fix_json_string(self, json_str: str) -> str:
+        """Fix common JSON formatting issues."""
+        if not json_str:
+            return "[]"
+            
+        # Replace literal \n and \t with actual newlines and tabs
+        json_str = json_str.replace('\\n', '\n').replace('\\t', '\t')
+        
+        # Remove extra escaping within strings
+        json_str = json_str.replace('\\"', '"')
+        
+        # Add braces if needed 
+        if not json_str.strip().startswith('[') and not json_str.strip().startswith('{'):
+            json_str = '[' + json_str
+        if not json_str.strip().endswith(']') and not json_str.strip().endswith('}'):
+            json_str = json_str + ']'
+            
+        # Fix trailing commas
+        json_str = re.sub(r',\s*(\}|\])', r'\1', json_str)
+        
+        # Replace single quotes with double quotes
+        json_str = json_str.replace("'", '"')
+        
+        return json_str
+
     def _call_llm_with_schema(self, prompt: str, model_type, system_prompt: Optional[str] = None, is_list: bool = False):
         """Call LLM and validate response against a Pydantic schema"""
         try:
@@ -61,6 +103,9 @@ class LLMAgent:
             else:
                 enhanced_system_prompt = "You must respond with valid JSON matching the required schema."
             
+            # Always add this instruction for better JSON responses
+            enhanced_system_prompt += "\n\nIMPORTANT: Return a valid JSON array with no extra text. Do not use escaped newlines or tabs in your JSON."
+            
             # Call the LLM with the enhanced prompt
             response = self._call_llm(prompt_with_schema, enhanced_system_prompt)
             
@@ -73,17 +118,19 @@ class LLMAgent:
             # Clean the response
             cleaned_response = self._clean_response(response)
             
-            
             # Parse JSON
             if is_list:
                 try:
                     # Log first few character codes for debugging
-                    import unicodedata
                     char_codes = [f"{ord(c)} ({unicodedata.name(c, 'UNKNOWN')})" for c in cleaned_response[:5]] if cleaned_response else []
                     logging.info(f"Cleaned response before list parsing (first 5 chars: {char_codes}): '{cleaned_response[:200]}...' ({len(cleaned_response)} chars)")
-                    json_data = json.loads(cleaned_response)
+                    
+                    # Use the retry method for more robust parsing
+                    json_data = self._parse_json_with_retry(cleaned_response)
+                    
                     if not isinstance(json_data, list):
                         json_data = [json_data]
+                        
                     # Otherwise use standard Pydantic validation
                     validated_items = []
                     for item in json_data:
@@ -109,12 +156,21 @@ class LLMAgent:
             else:
                 try:
                     # Log first few character codes for debugging
-                    import unicodedata
                     char_codes = [f"{ord(c)} ({unicodedata.name(c, 'UNKNOWN')})" for c in cleaned_response[:5]] if cleaned_response else []
                     logging.info(f"Cleaned response before object parsing (first 5 chars: {char_codes}): '{cleaned_response[:200]}...' ({len(cleaned_response)} chars)")
-                    # Parse and validate a single object
-                    json_data = json.loads(cleaned_response)
                     
+                    # Parse and validate a single object using retry method
+                    json_data = self._parse_json_with_retry(cleaned_response)
+
+                    # Handle case where parsing returns a list with a single object inside
+                    if isinstance(json_data, list) and len(json_data) == 1 and isinstance(json_data[0], dict):
+                        logging.info("Extracted single dictionary from list for object validation.")
+                        json_data = json_data[0]
+                    elif not isinstance(json_data, dict):
+                        st.error(f"Expected a dictionary for single object validation, but got {type(json_data)}")
+                        logging.error(f"Expected a dictionary for single object validation, but got {type(json_data)}")
+                        return {}
+
                     # Check for None values
                     for key in ['text', 'speaker', 'timecode']:
                         if key in json_data and json_data[key] is None:
@@ -155,7 +211,10 @@ class LLMAgent:
         
         {"The response should be a JSON array of objects matching this schema." if is_list else "The response should be a single JSON object matching this schema."}
         
-        Important: The response MUST be valid JSON with no extra text or markdown.
+        IMPORTANT: 
+        - The response MUST be valid JSON with no extra text or markdown
+        - Do not use escaped newlines or tabs within the JSON
+        - Return a properly formatted JSON array only, with no explanation text before or after
         """
         return enhanced_prompt
 
@@ -173,7 +232,8 @@ class LLMAgent:
     */
 
     // Return a JSON array with parsed elements (scene headers, dialogue, etc.)
-    // IMPORTANT: The response MUST be a valid, complete JSON array
+    // IMPORTANT: The response MUST be ONLY a valid, complete JSON array.
+    // IMPORTANT: DO NOT include any explanations, comments, code, or markdown.
     // IMPORTANT: Support full UTF-8 encoding for Slovak characters (č, ď, ľ, š, ť, ž, ý, á, í, é, etc.)
     return [
         // Example format - to be replaced with actual parsed content:
@@ -199,20 +259,21 @@ class LLMAgent:
             if hasattr(self, 'use_code_format') and self.use_code_format:
                 full_prompt = code_prompt
             else:
-                if system_prompt:
-                    full_prompt = f"System: {system_prompt}\n\nUser: {prompt}\n\nImportant: Support full UTF-8 encoding for Slovak characters (č, ď, ľ, š, ť, ž, ý, á, í, é, etc.). Respond with JSON only."
-                else:
-                    full_prompt = f"User: {prompt}\n\nImportant: Support full UTF-8 encoding for Slovak characters (č, ď, ľ, š, ť, ž, ý, á, í, é, etc.). Respond with JSON only."
-            
+                system_message = system_prompt if system_prompt else ""
+                system_message += "\n\nCRITICAL INSTRUCTION: Your response MUST be ONLY a valid JSON array matching the requested schema. Do NOT include any introductory text, explanations, comments, code snippets, markdown formatting, or anything other than the JSON itself. Ensure full UTF-8 support for all characters, including Slovak (č, ď, ľ, š, ť, ž, ý, á, í, é, etc.)."
+                
+                full_prompt = f"System: {system_message}\n\nUser: {prompt}"
+
             data = {
                 "model": self.model,
                 "prompt": full_prompt,
                 "temperature": 0.01,       # Very low temperature for structured output
                 "num_predict": 12000,       # Equivalent to max_tokens in OpenAI
                 "stop": ["```", "```json"], # Stop sequences to avoid markdown wrapping
-                "stream": False            # Ensure we get a complete response at once
+                "stream": False,           # Ensure we get a complete response at once
+                "format": "json"           # Explicitly request JSON format
             }
-            
+
             if hasattr(st, 'session_state') and st.session_state.get('detailed_progress', True):
                 st.write(f"Calling DeepSeek model: {self.model}")
             
@@ -290,8 +351,6 @@ class LLMAgent:
     
     def _call_openai(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """Call OpenAI API."""
-        import openai
-        
         openai.api_key = self.api_key
         
         messages = []
@@ -327,7 +386,7 @@ class LLMAgent:
     USER:
     {prompt}
 
-    IMPORTANT: Respond with valid, parseable JSON only. No explanations or other text.
+    IMPORTANT: Respond with valid, parseable JSON only. DO NOT include any explanations, comments, code, markdown, or any text outside the JSON structure itself.
     Example format:
     [
     {{
@@ -348,16 +407,17 @@ class LLMAgent:
     {prompt}
 
     IMPORTANT: Support full UTF-8 encoding for Slovak characters (č, ď, ľ, š, ť, ž, ý, á, í, é, etc.).
-    IMPORTANT: Respond with valid, parseable JSON only. No explanations or other text.
+    CRITICAL INSTRUCTION: Respond ONLY with the valid JSON structure. No introductory text, no explanations, no code, no markdown.
     """
-                
+
             data = {
                 "model": self.model,
                 "prompt": full_prompt,
                 "temperature": 0.01,  # Lower temperature for more predictable JSON
-                "stream": False       # Ensure we get a complete response at once
+                "stream": False,      # Ensure we get a complete response at once
+                "format": "json"      # Explicitly request JSON format
             }
-            
+
             st.write(f"Calling Ollama model: {self.model}")
             if hasattr(st, 'session_state') and st.session_state.get('debug_mode', False):
                 st.write(f"Prompt length: {len(full_prompt)} characters")
@@ -396,38 +456,82 @@ class LLMAgent:
             return ""
 
     def _clean_response(self, response: str) -> str:
-        """Clean the LLM response to extract useful content."""
-        # Handle None response
+        """Clean the LLM response to extract the first valid JSON object or array."""
         if response is None:
-            return "[]"  # Return empty JSON array for None
-            
-        # Remove style tags or any XML/HTML tags
-        response = re.sub(r'<[^>]+>', '', response)
-        
-        # Remove markdown code block syntax
-        response = re.sub(r'```json|```python|```|~~~', '', response)
-        
-        # Remove any "JSON:" or similar prefixes
-        response = re.sub(r'^.*?(\[|\{)', r'\1', response, flags=re.DOTALL)
-        
-        # If we have text after the JSON, remove it
-        json_end_match = re.search(r'(\]|\})[^\]\}]*$', response)
-        if json_end_match:
-            end_pos = json_end_match.start() + 1
-            response = response[:end_pos]
-        
-        # If response starts with backticks, remove them
-        response = response.strip('`')
+            return "[]"
 
-        # Attempt to fix invalid control characters within strings (common issue)
-        # Replace unescaped newlines, tabs, etc., with their escaped versions.
-        # This is a common cause of JSONDecodeError: Invalid control character
-        response = response.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
-        # Handle cases where the LLM might have already escaped them, causing double escapes
-        response = response.replace('\\\\n', '\\n').replace('\\\\r', '\\r').replace('\\\\t', '\\t')
-        
-        # Fix common JSON errors
-        response = response.replace("'", '"')  # Replace single quotes with double quotes
-        response = re.sub(r',\s*(\}|\])', r'\1', response)  # Remove trailing commas
-        
-        return response.strip()
+        response = response.strip()
+        # Remove markdown code blocks aggressively at the beginning and end
+        response = re.sub(r'^(```json|```python|```|~~~\s*)', '', response)
+        response = re.sub(r'(\s*```|~~~)$', '', response).strip()
+
+        # Defensive Check: Ensure the response starts like JSON
+        if not response.startswith('[') and not response.startswith('{'):
+            logging.warning(f"LLM response did not start with '[' or '{{'. Assuming invalid format. Response start: {response[:200]}...")
+            return "[]" # Return empty list immediately
+
+        # Find the start of the first JSON structure ([ or {)
+        first_bracket = response.find('[')
+        first_brace = response.find('{')
+        start_index = -1
+
+        if first_bracket != -1 and (first_brace == -1 or first_bracket < first_brace):
+            start_index = first_bracket
+            start_char = '['
+            end_char = ']'
+        elif first_brace != -1:
+            start_index = first_brace
+            start_char = '{'
+            end_char = '}'
+        else:
+            logging.warning(f"No JSON object or array start found in raw response: {response[:200]}...")
+            return "[]"
+
+        # Try to parse incrementally to find the end of the first valid JSON structure
+        # Start checking from minimum possible length (e.g., '{}' or '[]')
+        min_len = 2
+        valid_json_part = ""
+
+        for i in range(start_index + min_len, len(response) + 1):
+            substring = response[start_index:i]
+            # Optimization: Only attempt parsing if the substring ends with the potential closing character
+            if substring.endswith(end_char):
+                try:
+                    # Attempt to parse this potentially complete substring
+                    json.loads(substring)
+                    # If successful, this is the first valid complete JSON structure
+                    valid_json_part = substring
+                    logging.info(f"Successfully extracted valid JSON prefix of length {len(valid_json_part)}")
+                    break # IMPORTANT: Stop searching immediately
+                except json.JSONDecodeError:
+                    # It looked complete but wasn't valid JSON (e.g., nested structure incomplete), keep extending
+                    continue
+
+        if not valid_json_part:
+            logging.warning(f"Could not extract a valid JSON prefix via incremental parsing. Response start: {response[start_index:start_index+200]}... Falling back to _fix_json_string on the whole response.")
+            # Fallback: Try running the basic fixer on the whole string from the start index
+            # This is a last resort before _parse_json_with_retry potentially fails
+            valid_json_part = self._fix_json_string(response[start_index:])
+            # We return this potentially fixed string, and let _parse_json_with_retry handle the final parse attempt/error
+            logging.warning(f"Returning fallback fixed string: {valid_json_part[:200]}...")
+            # Note: We don't apply further cleaning here as _fix_json_string already did basic steps.
+            return valid_json_part
+
+
+        # --- Apply final cleaning steps ONLY to the successfully extracted valid_json_part ---
+        # These steps refine the structurally valid JSON but shouldn't break it
+
+        # Normalize internal whitespace carefully - avoid breaking strings
+        # This is less critical now that we have a valid structure, focus on other fixes
+        # valid_json_part = re.sub(r'\s+', ' ', valid_json_part).strip() # Maybe too aggressive?
+
+        valid_json_part = valid_json_part.replace("'", '"') # Replace single quotes
+        valid_json_part = re.sub(r',\s*(\}|\])', r'\1', valid_json_part) # Remove trailing commas
+        valid_json_part = re.sub(r'\}\s*\{', '}, {', valid_json_part) # Add missing commas between objects
+
+        if hasattr(st, 'session_state') and st.session_state.get('debug_mode', False):
+            logging.debug(f"Original response length: {len(response)}")
+            logging.debug(f"Extracted JSON part length: {len(valid_json_part)}")
+            logging.debug(f"Cleaned JSON part (first 200): {valid_json_part[:200]}")
+
+        return valid_json_part

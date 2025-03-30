@@ -19,10 +19,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # Import all agents
 from agents.correction_agent import CorrectionAgent
+from agents.correction_agent import CorrectionAgent
 from agents.segmentation_agent import DocumentSegmentationAgent
 from agents.entity_agent import EntityRecognitionAgent
 from agents.dialogue_agent import DialogueProcessingAgent
 from agents.docx_export_agent import DocxExportAgent
+# Removed DoclingAgent import
 
 class ScreenplayProcessor:
     """Main processor that orchestrates the agents to parse and analyze a screenplay."""
@@ -255,11 +257,13 @@ class ScreenplayProcessor:
         st.write(f"Found {len(character_dialogue)} characters with dialogue")
         
         # Identify scene changes
-        scenes = [s for s in segments if s.get("type") == "scene_header" or (
-            s.get("text", "").upper().startswith("INT") or 
-            s.get("text", "").upper().startswith("EXT")
-        )]
-        
+        scenes = [s for s in segments if s and (s.get("type") == "scene_header" or (
+            isinstance(s.get("text"), str) and (
+                s.get("text").upper().startswith("INT") or
+                s.get("text").upper().startswith("EXT")
+            )
+        ))]
+
         st.write(f"Found {len(scenes)} scene headers")
         
         # Count segment markers - more inclusive regex pattern
@@ -284,8 +288,8 @@ class ScreenplayProcessor:
             # Extract locations from scene headers
             locations = set()
             for scene in scenes:
-                text = scene.get("text", "")
-                if isinstance(text, str):
+                text = scene.get("text") # Get text, could be None
+                if isinstance(text, str): # Check if it's a string before processing
                     # Try to extract location after INT/EXT
                     loc_match = re.search(r'(?:INT|EXT)\.?\s*[-–—]?\s*(.*?)(?:\s*[-–—]\s*|$)', text, re.IGNORECASE)
                     if loc_match:
@@ -312,104 +316,6 @@ class ScreenplayProcessor:
                 return super().default(o)
         
         return json.dumps(result, cls=DateTimeEncoder, ensure_ascii=False, indent=2)
-    
-class EnhancedScreenplayProcessor(ScreenplayProcessor):
-    """Extended processor with Docling integration and dashboard support."""
-    
-    def __init__(self, *args, use_docling: bool = False, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.use_docling = use_docling
-    
-    def process_screenplay(self, text: str, chunk_size: int = 4000) -> Dict:
-        """Process screenplay with Docling-enhanced segmentation if enabled."""
-        if self.use_docling:
-            # --- Docling Integration (Commented Out) ---
-            # The correct usage pattern for the 'docling' library is unknown.
-            # The following code is commented out to prevent errors until the
-            # correct import and function/method calls are determined.
-            logging.warning("Docling integration is enabled but commented out due to unknown usage pattern.")
-            st.warning("Docling processing is currently disabled. Falling back to standard segmentation.")
-            # try:
-            #     logging.info("Processing screenplay using Docling for initial segmentation.")
-            #     # --- Docling Integration ---
-            #     # Replace this with the actual docling API call when known
-            #     logging.info(f"Calling docling.parse() on text (length: {len(text)})...")
-            #     docling_segments = docling.parse(text) # Example call (likely incorrect)
-            #     logging.info(f"Docling returned {len(docling_segments)} segments.")
-            #     logging.debug(f"First few Docling segments: {docling_segments[:3]}") # Log first few segments
-            #
-            #     # --- Integrate Docling results ---
-            #     # Replace the LLM-based segmentation step with Docling's output
-            #     with st.status("Processing screenplay (using Docling)...", expanded=True) as status:
-            #         # ... [Rest of the processing steps using docling_segments] ...
-            #         pass # Placeholder for the rest of the steps
-            #
-            #     return {
-            #         "segments": corrected_segments, # Replace with actual result
-            #         "entities": entities # Replace with actual result
-            #     }
-            #
-            # except AttributeError as ae:
-            #      logging.error(f"AttributeError during Docling processing: {ae}. Is 'docling.parse()' the correct usage?", exc_info=True)
-            #      st.error(f"Docling integration error: {ae}. Check library usage.")
-            #      return {"segments": [], "entities": {}, "error": str(ae)}
-            # except Exception as e:
-            #     logging.error(f"General error during Docling processing: {e}", exc_info=True)
-            #     st.error(f"An error occurred during Docling processing: {e}")
-            #     return {"segments": [], "entities": {}, "error": str(e)}
-            # --- End of Commented Out Section ---
 
-            # Fallback to standard processing since Docling part is commented out
-            logging.info("Falling back to standard LLM segmentation as Docling code is commented out.")
-            return super().process_screenplay(text, chunk_size)
-        else:
-            # If not using docling, call the original method from the parent class
-            logging.info("Processing screenplay using standard LLM segmentation.")
-            return super().process_screenplay(text, chunk_size)
-    
-    def set_dashboard_callback(self, callback: Callable):
-        """Set up real-time dashboard updates."""
-        self.dashboard_callback = callback
-
-    def export_csv(self, result: Dict) -> Dict[str, pd.DataFrame]:
-        """Export the screenplay analysis to CSV dataframes."""
-        segments = result.get("segments", [])
-        
-        # Convert segments to dataframes based on type
-        dataframes = {}
-        
-        # Dialogue dataframe
-        dialogue_segments = [s for s in segments if s.get("type") == "dialogue" or "speaker" in s]
-        if dialogue_segments:
-            dialogue_df = pd.DataFrame(dialogue_segments)
-            dataframes["dialogue"] = dialogue_df
-            
-        # Scene header dataframe
-        scene_segments = [s for s in segments if s.get("type") == "scene_header" or (
-            isinstance(s.get("text", ""), str) and (
-                s.get("text", "").upper().startswith("INT") or 
-                s.get("text", "").upper().startswith("EXT")
-            )
-        )]
-        if scene_segments:
-            scene_df = pd.DataFrame(scene_segments)
-            dataframes["scenes"] = scene_df
-            
-        # Title dataframe
-        title_segments = [s for s in segments if s.get("type") == "title" or (
-            isinstance(s.get("text", ""), str) and 
-            s.get("text", "").upper().startswith("TITULOK")
-        )]
-        if title_segments:
-            title_df = pd.DataFrame(title_segments)
-            dataframes["titles"] = title_df
-            
-        # Segment markers dataframe
-        segment_markers = [s for s in segments if s.get("type") == "segment_marker" or (
-            "timecode" in s and isinstance(s.get("timecode"), str) and re.search(r'[\d:]+[-]{5,}', s.get("timecode", ""))
-        )]
-        if segment_markers:
-            markers_df = pd.DataFrame(segment_markers)
-            dataframes["segments"] = markers_df
-            
-        return dataframes
+# Removed EnhancedScreenplayProcessor class and its methods
+# The base ScreenplayProcessor will now always be used.

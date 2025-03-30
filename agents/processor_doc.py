@@ -6,60 +6,40 @@ import streamlit as st
 from typing import Dict, List, Any, Optional
 import re
 import json
-import traceback
-import io
 
-# Import necessary docling components based on example
-from docling.document import Document
-from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.datamodel.pipeline_options import PdfPipelineOptions
-from docling.datamodel.base_models import InputFormat, ConversionStatus
-from docling.datamodel.input import DocumentConversionInput, DocumentStream
+# Import docling based on the documentation at https://docling-project.github.io/docling/reference/document_converter/
+try:
+    from docling.document import Document
+    from docling.document_converter import DocumentConverter
+    from docling.converter.layout_detector import LayoutDetector
+    DOCLING_AVAILABLE = True
+    logging.info("Docling package successfully imported")
+except ImportError:
+    DOCLING_AVAILABLE = False
+    logging.warning("Docling package not found. Install with 'pip install docling'.")
 
 class DoclingAgent:
     """Agent for preprocessing documents using the docling package."""
-
+    
     def __init__(self):
         """Initialize the Docling agent with document converter and layout detector."""
-        self.doc_converter = None
-        self.is_available = False # Default to not available
-
-        try:
-            # Configure options (assuming PDF input for now, might need adjustment for TXT)
-            # The example uses DoclingParseV4DocumentBackend, let's try that.
-            # If input is TXT, this might need different options or backend.
-            from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
-
-            pipeline_options = PdfPipelineOptions()
-            pipeline_options.generate_page_images = False # Don't need images for text processing
-
-            self.doc_converter = DocumentConverter(
-                format_options={
-                    # Assuming input might be PDF or TXT treated similarly by backend?
-                    # Or maybe we need separate converters/options? Start with PDF example.
-                    InputFormat.PDF: PdfFormatOption(
-                        pipeline_options=pipeline_options, backend=DoclingParseV4DocumentBackend
-                    ),
-                     # Add a basic option for TXT as well, maybe it uses the same backend?
-                    InputFormat.TXT: PdfFormatOption( # Re-using PdfFormatOption might be wrong, check docling docs if TXT needs specific options
-                        pipeline_options=pipeline_options, backend=DoclingParseV4DocumentBackend
-                    )
-                }
-            )
-            self.is_available = True
-            logging.info("Docling DocumentConverter initialized successfully.")
-
-        except ImportError as ie:
-            self.is_available = False
-            logging.error(f"Docling import failed during DoclingAgent initialization: {ie}", exc_info=True)
-            logging.warning("Docling package might be missing or corrupted. Install/Reinstall with 'pip install docling'.")
-        except Exception as e:
-            self.is_available = False
-            logging.error(f"Error initializing Docling DocumentConverter: {str(e)}", exc_info=True)
-
-    def preprocess_document(self, text: str, filename: str = "input.txt") -> Dict:
+        self.document_converter = None
+        self.layout_detector = None
+        
+        if DOCLING_AVAILABLE:
+            try:
+                # Initialize document converter for screenplay-specific document processing
+                self.layout_detector = LayoutDetector()
+                self.document_converter = DocumentConverter(layout_detector=self.layout_detector)
+                st.success("Docling document converter initialized successfully.")
+                logging.info("Docling document converter initialized successfully.")
+            except Exception as e:
+                st.error(f"Error initializing Docling document converter: {str(e)}")
+                logging.error(f"Error initializing Docling document converter: {str(e)}", exc_info=True)
+    
+    def preprocess_document(self, text: str) -> Dict:
         """
-        Preprocess the screenplay document using the Docling DocumentConverter.
+        Preprocess the screenplay document using docling document converter.
         
         Args:
             text: The raw screenplay text
@@ -67,75 +47,52 @@ class DoclingAgent:
         Returns:
             Dictionary with preprocessed document structure
         """
-        if not self.is_available or self.doc_converter is None:
-            st.warning("Docling not available or failed to initialize. Skipping preprocessing.")
-            logging.warning("Docling not available or failed to initialize. Skipping preprocessing.")
-            return {"raw_text": text, "segments": [], "entities": {}} # Ensure entities key exists
-
+        if not DOCLING_AVAILABLE or self.document_converter is None:
+            st.warning("Docling not available. Skipping preprocessing.")
+            logging.warning("Docling not available. Skipping preprocessing.")
+            return {"raw_text": text, "segments": []}
+        
         try:
-            logging.info(f"Processing text (length: {len(text)}) with Docling DocumentConverter...")
-
-            # Create input suitable for DocumentConverter (using stream)
-            text_stream = io.BytesIO(text.encode('utf-8'))
-            doc_stream = DocumentStream(name=filename, stream=text_stream)
-            doc_input = DocumentConversionInput.from_streams([doc_stream])
-
-            # Convert the document
-            # Use convert_all as per example, even for single doc
-            conv_results: List[ConversionResult] = self.doc_converter.convert_all(
-                doc_input,
-                raises_on_error=False # Get results even if there are errors
-            )
-
-            if not conv_results:
-                st.error("Docling conversion returned no results.")
-                logging.error("Docling conversion returned no results.")
-                return {"raw_text": text, "segments": [], "entities": {}}
-
-            conv_res = conv_results[0] # Process the first (only) result
-
-            if conv_res.status == ConversionStatus.SUCCESS:
-                logging.info("Docling conversion successful.")
-                doc: Document = conv_res.document # Get the processed Document object
-
-                # Extract segments and entities from the Docling Document object
-                logging.info("Extracting segments from Docling document...")
-                segments = self._extract_segments(doc)
-                logging.info("Extracting entities from Docling document...")
-                entities = self._extract_entities(doc)
-
-                logging.info(f"Docling preprocessing complete. Found {len(segments)} segments and {len(entities.get('characters', []))} characters.")
-
-                return {
-                    "raw_text": text,
-                    "processed_doc": doc, # Keep the processed doc object if needed later
-                    "segments": segments,
-                    "entities": entities
-                }
-            elif conv_res.status == ConversionStatus.PARTIAL_SUCCESS:
-                 logging.warning(f"Docling conversion partially successful for {filename}. Errors: {conv_res.errors}")
-                 st.warning(f"Docling conversion had errors: {conv_res.errors}. Results might be incomplete.")
-                 # Still try to extract from the potentially partial document
-                 doc: Document = conv_res.document
-                 segments = self._extract_segments(doc)
-                 entities = self._extract_entities(doc)
-                 return {"raw_text": text, "processed_doc": doc, "segments": segments, "entities": entities}
-            else: # Failed
-                 logging.error(f"Docling conversion failed for {filename}. Status: {conv_res.status}, Errors: {conv_res.errors}")
-                 st.error(f"Docling conversion failed: {conv_res.errors}")
-                 return {"raw_text": text, "segments": [], "entities": {}}
-
+            # Create a docling Document
+            logging.info(f"Creating Document object from text ({len(text)} characters)")
+            doc = Document(text=text)
+            
+            # Use layout detector to analyze document structure
+            logging.info("Detecting document layout...")
+            self.layout_detector.detect(doc)
+            
+            # Convert document to structured format
+            logging.info("Converting document...")
+            converted_doc = self.document_converter.convert(doc)
+            
+            # Extract screenplay-specific elements
+            logging.info("Extracting segments from document...")
+            segments = self._extract_segments(converted_doc)
+            
+            # Extract entities from the document
+            logging.info("Extracting entities from document...")
+            entities = self._extract_entities(converted_doc)
+            
+            logging.info(f"Docling preprocessing complete. Found {len(segments)} segments and {len(entities.get('characters', []))} characters.")
+            
+            return {
+                "raw_text": text,
+                "processed_doc": converted_doc,  # The converted docling document object
+                "segments": segments,
+                "entities": entities
+            }
+            
         except Exception as e:
-            st.error(f"Error during Docling preprocessing pipeline: {str(e)}")
-            logging.error(f"Error during Docling preprocessing pipeline: {str(e)}", exc_info=True)
+            st.error(f"Error in Docling preprocessing: {str(e)}")
+            logging.error(f"Error in Docling preprocessing: {str(e)}", exc_info=True)
+            import traceback
             st.error(traceback.format_exc())
-            return {"raw_text": text, "segments": [], "entities": {}}
-
-    def _extract_segments(self, doc: Document) -> List[Dict]: # Added type hint
+            return {"raw_text": text, "segments": []}
+    
+    def _extract_segments(self, doc) -> List[Dict]:
         """Extract segments from docling document using the document converter structure."""
         segments = []
         try:
-            
             # Process the document elements based on the converted document structure
             # According to the docling documentation, the converter produces structured elements
             
@@ -216,6 +173,7 @@ class DoclingAgent:
         except Exception as e:
             st.warning(f"Error extracting segments with docling: {str(e)}")
             logging.error(f"Error extracting segments with docling: {str(e)}", exc_info=True)
+            import traceback
             st.warning(traceback.format_exc())
             # If there's an error, return an empty list
             segments = []
@@ -298,6 +256,7 @@ class DoclingAgent:
         except Exception as e:
             st.warning(f"Error extracting entities with docling: {str(e)}")
             logging.error(f"Error extracting entities with docling: {str(e)}", exc_info=True)
+            import traceback
             st.warning(traceback.format_exc())
             
         return entities

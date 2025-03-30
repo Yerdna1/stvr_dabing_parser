@@ -12,19 +12,17 @@ from datetime import datetime
 
 from config import setup_sidebar_config
 from file_utils import read_file
-from processor import EnhancedScreenplayProcessor
+from processor import ScreenplayProcessor # Use base processor
 
 
 # Configure page
-st.title("🎬 Enhanced Screenplay Parser with Docling")
-st.write("Upload a screenplay document to parse and analyze it using Docling and LLM agents.")
+st.title("🎬 Screenplay Parser") # Simplified title
+st.write("Upload a screenplay document to parse and analyze it using LLM agents.")
 
 # Setup sidebar configuration
 config = setup_sidebar_config()
 
-# Add docling-specific options to sidebar
-use_docling = st.sidebar.checkbox("Use Docling for preprocessing", value=True, 
-                                help="Enable Docling for initial document parsing")
+# Removed docling checkbox
 
 # Add episode number input for segment numbering
 episode_number = st.sidebar.text_input("Episode Number (for segment numbering)", key="episode_number")
@@ -76,19 +74,19 @@ if uploaded_file:
                     def add_to_log(message):
                         timestamp = datetime.now().strftime("%H:%M:%S")
                         log_data.append(f"{timestamp} - {message}")
-                        debug_log.code("\n".join(log_data))
+                    debug_log.code("\n".join(log_data))
                 
                 # Update initial status
                 status_text.write("Initializing processor...")
-                add_to_log("Initializing screenplay processor with Docling")
+                add_to_log("Initializing screenplay processor") # Simplified log message
             
-            # Initialize enhanced processor with selected provider and docling
-            processor = EnhancedScreenplayProcessor(
+            # Initialize base processor
+            processor = ScreenplayProcessor(
                 provider=config["llm_provider"],
                 model=config["model"],
                 api_key=config["api_key"] if config["llm_provider"] == "OpenAI" else None,
-                ollama_url=config["ollama_url"] if config["llm_provider"] in ["Ollama", "DeepSeek"] else None,
-                use_docling=use_docling
+                ollama_url=config["ollama_url"] if config["llm_provider"] in ["Ollama", "DeepSeek"] else None
+                # Removed use_docling parameter
             )
             
             # Setup dashboard callbacks if enabled
@@ -134,6 +132,12 @@ if uploaded_file:
                         segments_df = []
                         
                         for seg in recent_segments:
+                            # Add check to skip None segments gracefully
+                            if seg is None:
+                                if 'add_to_log' in locals(): # Check if logging function exists
+                                    add_to_log("Warning: Skipped a None segment during dashboard update.")
+                                continue # Skip to the next segment
+
                             if seg.get("type") == "segment_marker":
                                 segments_df.append({
                                     "Type": "SEGMENT",
@@ -146,16 +150,20 @@ if uploaded_file:
                                     "Type": seg.get("type", "DIALOGUE"),
                                     "Timecode": seg.get("timecode", ""),
                                     "Speaker": seg.get("speaker", ""),
-                                    "Content": seg.get("text", "")[:80] + ("..." if len(seg.get("text", "")) > 80 else "")
+                                    # Ensure text is a string before slicing
+                                    "Content": (text_val := seg.get("text", "")),
+                                    "Content": text_val[:80] + ("..." if len(text_val) > 80 else "") if isinstance(text_val, str) else "[Invalid Text Data]"
                                 })
                             else:
                                 segments_df.append({
                                     "Type": seg.get("type", "TEXT"),
                                     "Timecode": seg.get("timecode", ""),
                                     "Speaker": "",
-                                    "Content": seg.get("text", "")[:80] + ("..." if len(seg.get("text", "")) > 80 else "")
+                                     # Ensure text is a string before slicing
+                                    "Content": (text_val := seg.get("text", "")),
+                                    "Content": text_val[:80] + ("..." if len(text_val) > 80 else "") if isinstance(text_val, str) else "[Invalid Text Data]"
                                 })
-                        
+
                         # Create styled dataframe with color highlighting
                         if segments_df:
                             df = pd.DataFrame(segments_df)
@@ -407,25 +415,17 @@ else:
     
     with st.expander("About this enhanced app"):
         st.markdown("""
-        ### Enhanced Screenplay Parser with Docling
+        ### Screenplay Parser
         
-        This app uses the Docling package combined with LLM agents to intelligently parse and analyze screenplay documents.
-        
-        #### Benefits of using Docling:
-        
-        - Improved initial document parsing and segmentation
-        - Better detection of screenplay elements (characters, scenes, dialogue)
-        - Reduced dependency on LLM calls for basic document structure
-        - More consistent handling of different document formats
+        This app uses LLM agents to intelligently parse and analyze screenplay documents.
         
         #### How it works
         
-        1. **Docling Preprocessing**: Analyzes the document structure using linguistic methods
-        2. **Document Segmentation**: Breaks the screenplay into logical parts using Docling results
-        3. **Entity Recognition**: Identifies characters, locations, and audio notations
-        4. **Dialogue Processing**: Normalizes dialogue and speaker information
-        5. **Correction**: Fixes inconsistencies across the document
-        6. **DOCX Export**: Creates professionally formatted document with proper styling
+        1. **Document Segmentation**: Breaks the screenplay into logical parts using an LLM.
+        2. **Entity Recognition**: Identifies characters, locations, and audio notations using an LLM.
+        3. **Dialogue Processing**: Normalizes dialogue and speaker information using an LLM.
+        4. **Correction**: Fixes inconsistencies across the document using an LLM.
+        5. **DOCX Export**: Creates professionally formatted document with proper styling.
         
         #### LLM Providers
         
@@ -435,4 +435,4 @@ else:
 
 # Footer
 st.write("---")
-st.caption("Enhanced Screenplay Parser with Docling | Created with Streamlit")
+st.caption("Screenplay Parser | Created with Streamlit")

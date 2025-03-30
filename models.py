@@ -59,12 +59,12 @@ class Entities(BaseModel):
 
 class ProcessedSegment(BaseModel):
     """Generic segment model to handle any type of segment data"""
-    type: Optional[str] = Field(None, description="Type of segment (dialogue, scene_header, segment_marker, text)")
-    timecode: Optional[str] = Field(None, description="Timestamp or segment marker with dashes")
-    speaker: Optional[str] = Field(None, description="Character speaking (for dialogue)")
-    text: Optional[str] = Field(None, description="Content text")
-    segment_number: Optional[int] = Field(None, description="Number for segment markers")
-    scene_type: Optional[str] = Field(None, description="INT or EXT (for scene headers)")
+    type: Optional[str] = Field("", description="Type of segment (dialogue, scene_header, segment_marker, text)") # Default to empty string
+    timecode: Optional[str] = Field("", description="Timestamp or segment marker with dashes") # Default to empty string
+    speaker: Optional[str] = Field("", description="Character speaking (for dialogue)") # Default to empty string
+    text: Optional[str] = Field("", description="Content text") # Default to empty string
+    segment_number: Optional[int] = Field(None, description="Number for segment markers") # Keep None for optional int
+    scene_type: Optional[str] = Field("", description="INT or EXT (for scene headers)") # Default to empty string
     location: Optional[str] = Field(None, description="Location (for scene headers)")
     
     class Config:
@@ -75,9 +75,4 @@ class ScreenplayResult(BaseModel):
     segments: List[ProcessedSegment] = Field([], description="List of all processed segments in the screenplay")
     entities: Entities = Field(default_factory=Entities, description="Entity information extracted from the screenplay")
 
-@field_validator('timecode', 'text', 'speaker', mode='before')
-def convert_none_to_empty(cls, v):
-    """Convert None values to empty strings"""
-    if v is None:
-        return ""
-    return v
+# Removed standalone validator as defaults are handled in Fields now
