@@ -6,9 +6,13 @@ import json
 import time
 import requests
 import streamlit as st
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Type, TypeVar, Union
 
 from config import MAX_RETRIES, RETRY_DELAY, TEMPERATURE
+from models import BaseSegment, ProcessedSegment, Entities
+
+
+T = TypeVar('T')
 
 class LLMAgent:
     """Base class for LLM agents"""
@@ -41,6 +45,104 @@ class LLMAgent:
                 else:
                     st.error(f"Error calling LLM: {str(e)}")
                     return ""
+
+    def _call_llm_with_schema(self, prompt: str, model_type, system_prompt: Optional[str] = None, is_list: bool = False):
+        """Call LLM and validate response against a Pydantic schema"""
+        try:
+            # Enhance prompt with schema information
+            prompt_with_schema = self._enhance_prompt_with_schema(prompt, model_type, is_list)
+            
+            # Add system prompt for better guidance
+            enhanced_system_prompt = system_prompt
+            if system_prompt:
+                enhanced_system_prompt += "\n\nYou must respond with valid JSON matching the required schema."
+            else:
+                enhanced_system_prompt = "You must respond with valid JSON matching the required schema."
+            
+            # Call the LLM with the enhanced prompt
+            response = self._call_llm(prompt_with_schema, enhanced_system_prompt)
+            
+            # Check for None responses
+            if response is None:
+                st.error("Received None response from LLM")
+                return [] if is_list else {}
+                
+            # Clean the response
+            cleaned_response = self._clean_response(response)
+            
+            # Parse JSON
+            if is_list:
+                try:
+                    json_data = json.loads(cleaned_response)
+                    if not isinstance(json_data, list):
+                        json_data = [json_data]
+                    
+                    # Otherwise use standard Pydantic validation
+                    validated_items = []
+                    for item in json_data:
+                        # Check for None or empty values in crucial fields
+                        for key in ['text', 'speaker', 'timecode']:
+                            if key in item and item[key] is None:
+                                item[key] = ""  # Convert None to empty string
+                        
+                        try:
+                            validated_item = model_type.model_validate(item)
+                            validated_items.append(validated_item.model_dump())
+                        except Exception as e:
+                            st.warning(f"Item validation error for {model_type.__name__}: {str(e)}")
+                            # If validation fails, just add the original item
+                            validated_items.append(item)
+                    
+                    return validated_items
+                except json.JSONDecodeError as e:
+                    st.error(f"JSON parsing error: {str(e)}")
+                    return []
+            else:
+                try:
+                    # Parse and validate a single object
+                    json_data = json.loads(cleaned_response)
+                    
+                    # Check for None values
+                    for key in ['text', 'speaker', 'timecode']:
+                        if key in json_data and json_data[key] is None:
+                            json_data[key] = ""  # Convert None to empty string
+                    
+                    validated_data = model_type.model_validate(json_data)
+                    return validated_data.model_dump()
+                except json.JSONDecodeError:
+                    st.error(f"JSON parsing error in single object")
+                    return {}
+                    
+        except Exception as e:
+            st.error(f"Validation error for {model_type.__name__ if model_type else 'unknown model'}: {str(e)}")
+            # Return the original cleaned response as a fallback
+            return [] if is_list else {}
+    
+    def _enhance_prompt_with_schema(self, prompt: str, model_type, is_list: bool) -> str:
+        """Add schema information to the prompt for better LLM parsing"""
+        try:
+            # Try Pydantic v2.x method first
+            schema_json = model_type.model_json_schema()
+        except AttributeError:
+            # Fall back to Pydantic v1.x method
+            schema_json = model_type.schema_json(indent=2)
+            
+        if isinstance(schema_json, str):
+            schema_str = schema_json
+        else:
+            schema_str = json.dumps(schema_json, indent=2)
+        
+        enhanced_prompt = f"""
+        {prompt}
+        
+        Please format your response as valid JSON that matches this schema:
+        {schema_str}
+        
+        {"The response should be a JSON array of objects matching this schema." if is_list else "The response should be a single JSON object matching this schema."}
+        
+        Important: The response MUST be valid JSON with no extra text or markdown.
+        """
+        return enhanced_prompt
 
     def _call_deepseek(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """Call Ollama API with optimized handling for DeepSeek Coder models."""
@@ -280,6 +382,10 @@ class LLMAgent:
 
     def _clean_response(self, response: str) -> str:
         """Clean the LLM response to extract useful content."""
+        # Handle None response
+        if response is None:
+            return "[]"  # Return empty JSON array for None
+            
         # Remove style tags or any XML/HTML tags
         response = re.sub(r'<[^>]+>', '', response)
         

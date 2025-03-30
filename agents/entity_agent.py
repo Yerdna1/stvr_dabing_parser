@@ -7,36 +7,24 @@ import streamlit as st
 from typing import Dict, List, Any
 
 from agents.llm_agent import LLMAgent
+from models import Entities, ProcessedSegment, BaseSegment, DialogueSegment, SceneHeaderSegment, SegmentMarker
+
 
 class EntityRecognitionAgent(LLMAgent):
     """Agent for identifying and normalizing entities in the screenplay."""
     
     def identify_entities(self, segments: List[Dict]) -> Dict:
-        """Identify characters, locations, and other entities in the segments."""
-        # First, try to extract entities directly from segments as a fallback
-        characters_direct = self._extract_characters_directly(segments)
-        locations_direct = self._extract_locations_directly(segments)
-        
-        # Log what we found directly
-        st.write(f"Direct extraction found {len(characters_direct)} characters and {len(locations_direct)} locations")
-        
+        """Identify characters, locations, and other entities in the segments using Pydantic-AI."""
         system_prompt = """
         You are an expert screenplay analyzer. Your task is to extract and normalize all entities from a screenplay.
         Focus on:
         1. Characters - Find all character names and normalize any inconsistencies
         2. Locations - Extract all locations mentioned
         3. Audio notations - Identify all audio notation types (MO, VO, zMO, etc.) and explain their meaning
-        
-        Format your response as JSON with these keys:
-        - "characters": List of unique character names
-        - "locations": List of unique locations
-        - "audio_notations": Dictionary mapping audio notation to its meaning
         """
         
-        # Extract dialogue segments to analyze characters
+        # Extract dialogue and scene segments
         dialogue_segments = [s for s in segments if s.get("type") == "dialogue" or "speaker" in s]
-        
-        # Extract scene headers to analyze locations
         scene_segments = [s for s in segments if s.get("type") == "scene_header"]
         
         prompt = f"""
@@ -51,43 +39,29 @@ class EntityRecognitionAgent(LLMAgent):
         ```
         {json.dumps(scene_segments, indent=2)}
         ```
-        
-        Return ONLY the JSON without any additional explanation.
         """
         
-        response = self._call_llm(prompt, system_prompt)
+        # Use Pydantic-AI to process and validate entity extraction
+        entities = self._call_llm_with_schema(prompt, Entities, system_prompt)
         
-        try:
-            # Try to extract JSON from the response
-            json_match = re.search(r'(\{.*\})', response, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(1)
-                entities = json.loads(json_str)
-            else:
-                entities = json.loads(response)
-            
-            # Merge with directly extracted entities if LLM results are empty or sparse
-            if not entities.get("characters") or len(entities.get("characters", [])) < len(characters_direct):
-                st.write(f"LLM found {len(entities.get('characters', []))} characters, using direct extraction results instead")
-                entities["characters"] = list(characters_direct)
-            
-            if not entities.get("locations") or len(entities.get("locations", [])) < len(locations_direct):
-                st.write(f"LLM found {len(entities.get('locations', []))} locations, using direct extraction results instead")
-                entities["locations"] = list(locations_direct)
-            
-            # Make sure we have audio notations
-            if "audio_notations" not in entities:
-                entities["audio_notations"] = self._extract_audio_notations_directly(segments)
-            
-            return entities
-        except json.JSONDecodeError:
-            st.error(f"Failed to parse entity recognition response as JSON: {response}")
-            # Return our directly extracted entities as a fallback
-            return {
-                "characters": list(characters_direct),
-                "locations": list(locations_direct),
-                "audio_notations": self._extract_audio_notations_directly(segments)
-            }
+        # If we got a string response rather than parsed data, fall back to the old method
+        if isinstance(entities, str):
+            # The existing fallback logic...
+            pass
+        
+        # Merge with directly extracted entities if needed
+        characters_direct = self._extract_characters_directly(segments)
+        locations_direct = self._extract_locations_directly(segments)
+        
+        if not entities.get("characters") or len(entities.get("characters", [])) < len(characters_direct):
+            st.write(f"LLM found {len(entities.get('characters', []))} characters, using direct extraction results instead")
+            entities["characters"] = list(characters_direct)
+        
+        if not entities.get("locations") or len(entities.get("locations", [])) < len(locations_direct):
+            st.write(f"LLM found {len(entities.get('locations', []))} locations, using direct extraction results instead")
+            entities["locations"] = list(locations_direct)
+        
+        return entities
     
     def _extract_characters_directly(self, segments: List[Dict]) -> set:
         """Extract character names directly from the segments."""

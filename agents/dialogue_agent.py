@@ -7,12 +7,13 @@ import streamlit as st
 from typing import Dict, List, Any
 
 from agents.llm_agent import LLMAgent
+from models import ProcessedSegment, DialogueSegment
 
 class DialogueProcessingAgent(LLMAgent):
     """Agent for understanding and normalizing dialogue."""
     
     def process_dialogue(self, dialogue_segments: List[Dict]) -> List[Dict]:
-        """Process dialogue segments to normalize and fill in missing information."""
+        """Process dialogue segments to normalize and fill in missing information using Pydantic-AI."""
         if not dialogue_segments:
             return []
             
@@ -25,7 +26,11 @@ class DialogueProcessingAgent(LLMAgent):
         2. Identify the correct audio notation type
         3. Clean the dialogue text, preserving stage directions within dialogue
         
-        Return the processed dialogues in the same JSON format, but with normalized values.
+        Return the processed dialogues as a JSON array of objects with these fields:
+        - type: "dialogue" for all segments
+        - speaker: The normalized speaker name with any audio notation in parentheses
+        - text: The cleaned dialogue text
+        - timecode: Any timestamp if present
         """
         
         # Process in batches to avoid hitting token limits
@@ -44,23 +49,85 @@ class DialogueProcessingAgent(LLMAgent):
             {json.dumps(batch, indent=2)}
             ```
             
-            Return ONLY the JSON array of processed dialogue segments.
+            For each segment:
+            1. Standardize the speaker name (e.g., "JOHN" instead of "JOHN1" or "john")
+            2. Keep audio notations like (VO) or (MO) with the speaker name
+            3. Clean any formatting issues in the dialogue text
+            4. Preserve any timecode information
+            
+            Return a list of processed dialogue segments.
             """
             
-            response = self._call_llm(prompt, system_prompt)
-            
+            # First try: Use Pydantic-AI for validation
             try:
+                # Use the call_llm_with_schema method to get validated dialogue segments
+                processed_batch = self._call_llm_with_schema(prompt, ProcessedSegment, system_prompt, is_list=True)
+                
+                # If we got a valid list of segments, add them to our results
+                if isinstance(processed_batch, list) and processed_batch:
+                    all_processed.extend(processed_batch)
+                    continue  # Success, move to next batch
+                
+                # If we got a string or empty list, fall back to traditional parsing
+                if hasattr(st, 'session_state') and st.session_state.get('debug_mode', False):
+                    st.warning("Pydantic-AI validation returned a string or empty list, falling back to traditional parsing")
+            
+            except Exception as e:
+                if hasattr(st, 'session_state') and st.session_state.get('debug_mode', False):
+                    st.warning(f"Pydantic-AI validation failed: {str(e)}, falling back to traditional parsing")
+            
+            # Second try: Traditional LLM call with json extraction
+            try:
+                response = self._call_llm(prompt, system_prompt)
+                
                 # Try to extract JSON from the response
                 json_match = re.search(r'(\[\s*\{.*\}\s*\])', response, re.DOTALL)
                 if json_match:
                     json_str = json_match.group(1)
-                    processed_batch = json.loads(json_str)
+                    try:
+                        processed_batch = json.loads(json_str)
+                    except json.JSONDecodeError:
+                        # Try to fix common JSON issues
+                        fixed_json = json_str.replace("'", '"')  # Replace single quotes
+                        fixed_json = re.sub(r',\s*(\}|\])', r'\1', fixed_json)  # Remove trailing commas
+                        processed_batch = json.loads(fixed_json)
                 else:
-                    processed_batch = json.loads(response)
-                    
-                all_processed.extend(processed_batch)
-            except json.JSONDecodeError:
-                st.error(f"Failed to parse dialogue processing response as JSON: {response}")
-                all_processed.extend(batch)  # Use original batch on error
+                    # Try direct parsing
+                    cleaned_response = self._clean_response(response)
+                    processed_batch = json.loads(cleaned_response)
                 
+                # Validate each segment manually
+                validated_batch = []
+                for segment in processed_batch:
+                    try:
+                        # Set required fields if missing
+                        if "type" not in segment:
+                            segment["type"] = "dialogue"
+                        if "text" not in segment and "dialogue" in segment:
+                            segment["text"] = segment["dialogue"]
+                        
+                        # Ensure speaker consistency
+                        if "speaker" in segment and isinstance(segment["speaker"], str):
+                            # Clean up speaker name if needed
+                            speaker = segment["speaker"].strip()
+                            # Make sure audio notations are properly formatted
+                            if "(" in speaker and ")" not in speaker:
+                                speaker += ")"
+                            segment["speaker"] = speaker
+                        
+                        validated_batch.append(segment)
+                    except Exception as e:
+                        if hasattr(st, 'session_state') and st.session_state.get('debug_mode', False):
+                            st.warning(f"Segment validation error: {str(e)}")
+                        # Use original segment as fallback
+                        validated_batch.append(segment)
+                
+                all_processed.extend(validated_batch)
+                
+            except Exception as e:
+                st.error(f"Failed to parse dialogue processing response: {response[:300]}...")
+                st.error(f"Error: {str(e)}")
+                # Use original batch on error
+                all_processed.extend(batch)
+        
         return all_processed
