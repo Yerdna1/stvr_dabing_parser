@@ -1,6 +1,8 @@
 """
 Base LLM Agent class for the Screenplay Parser App
 """
+import logging # Ensure logging is imported
+import logging
 import re
 import json
 import time
@@ -65,18 +67,23 @@ class LLMAgent:
             # Check for None responses
             if response is None:
                 st.error("Received None response from LLM")
+                logging.error("Received None response from LLM")
                 return [] if is_list else {}
                 
             # Clean the response
             cleaned_response = self._clean_response(response)
             
+            
             # Parse JSON
             if is_list:
                 try:
+                    # Log first few character codes for debugging
+                    import unicodedata
+                    char_codes = [f"{ord(c)} ({unicodedata.name(c, 'UNKNOWN')})" for c in cleaned_response[:5]] if cleaned_response else []
+                    logging.info(f"Cleaned response before list parsing (first 5 chars: {char_codes}): '{cleaned_response[:200]}...' ({len(cleaned_response)} chars)")
                     json_data = json.loads(cleaned_response)
                     if not isinstance(json_data, list):
                         json_data = [json_data]
-                    
                     # Otherwise use standard Pydantic validation
                     validated_items = []
                     for item in json_data:
@@ -90,15 +97,21 @@ class LLMAgent:
                             validated_items.append(validated_item.model_dump())
                         except Exception as e:
                             st.warning(f"Item validation error for {model_type.__name__}: {str(e)}")
+                            logging.warning(f"Item validation error for {model_type.__name__}: {str(e)}")
                             # If validation fails, just add the original item
                             validated_items.append(item)
                     
                     return validated_items
                 except json.JSONDecodeError as e:
                     st.error(f"JSON parsing error: {str(e)}")
+                    logging.error(f"JSON parsing error: {str(e)}")
                     return []
             else:
                 try:
+                    # Log first few character codes for debugging
+                    import unicodedata
+                    char_codes = [f"{ord(c)} ({unicodedata.name(c, 'UNKNOWN')})" for c in cleaned_response[:5]] if cleaned_response else []
+                    logging.info(f"Cleaned response before object parsing (first 5 chars: {char_codes}): '{cleaned_response[:200]}...' ({len(cleaned_response)} chars)")
                     # Parse and validate a single object
                     json_data = json.loads(cleaned_response)
                     
@@ -111,10 +124,12 @@ class LLMAgent:
                     return validated_data.model_dump()
                 except json.JSONDecodeError:
                     st.error(f"JSON parsing error in single object")
+                    logging.error(f"JSON parsing error in single object")
                     return {}
                     
         except Exception as e:
             st.error(f"Validation error for {model_type.__name__ if model_type else 'unknown model'}: {str(e)}")
+            logging.error(f"Validation error for {model_type.__name__ if model_type else 'unknown model'}: {str(e)}")
             # Return the original cleaned response as a fallback
             return [] if is_list else {}
     
@@ -403,6 +418,13 @@ class LLMAgent:
         
         # If response starts with backticks, remove them
         response = response.strip('`')
+
+        # Attempt to fix invalid control characters within strings (common issue)
+        # Replace unescaped newlines, tabs, etc., with their escaped versions.
+        # This is a common cause of JSONDecodeError: Invalid control character
+        response = response.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+        # Handle cases where the LLM might have already escaped them, causing double escapes
+        response = response.replace('\\\\n', '\\n').replace('\\\\r', '\\r').replace('\\\\t', '\\t')
         
         # Fix common JSON errors
         response = response.replace("'", '"')  # Replace single quotes with double quotes

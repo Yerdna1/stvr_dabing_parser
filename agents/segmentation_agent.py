@@ -133,15 +133,17 @@ class DocumentSegmentationAgent(LLMAgent):
                     # Add to live visualization
                     segment_type = seg.get("type", "text")
                     if "speaker" in seg:
-                        logging.info(f"Processing segment with speaker: {seg}") # Moved log here
                         new_row = pd.DataFrame([{
                             "Type": segment_type.upper(),
                             "Timecode": seg.get("timecode", ""),
                             "Speaker": seg.get("speaker", ""),
-                            "Text": seg.get("text", "")[:80] + ("..." if len(seg.get("text", "")) > 80 else "")
+                            # Get text, ensure it's a string before operating on it
+                            "Text": (text_val := seg.get("text", "")), # Get value, default to ""
+                            "Text": text_val[:80] + ("..." if len(text_val) > 80 else "") if isinstance(text_val, str) else "" # Process if string
                         }])
                         live_segments_df = pd.concat([live_segments_df, new_row], ignore_index=True)
-                    elif "text" in seg and seg.get("text", "").strip():
+                    # Ensure text exists, is a string, and is not empty after stripping
+                    elif "text" in seg and isinstance(text_val := seg.get("text"), str) and text_val.strip():
                         new_row = pd.DataFrame([{
                             "Type": segment_type.upper(),
                             "Timecode": seg.get("timecode", ""),
@@ -323,11 +325,11 @@ class DocumentSegmentationAgent(LLMAgent):
             if hasattr(st, 'session_state') and st.session_state.get('detailed_progress', True):
                 st.write(f"Processing chunk {chunk_index} with traditional parsing")
             
+            
             response = self._call_llm(prompt, system_prompt)
             
             # Try to parse as JSON directly
             try:
-                segments = json.loads(response)
                 return self._normalize_segments(segments)
             except json.JSONDecodeError:
                 # If direct parsing fails, try extraction techniques
@@ -535,6 +537,9 @@ class DocumentSegmentationAgent(LLMAgent):
             
             if "text" not in segment:
                 segment["text"] = ""
+            # Ensure existing text field is not None
+            elif segment.get("text") is None:
+                 segment["text"] = ""
             
             normalized.append(segment)
         

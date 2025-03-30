@@ -104,7 +104,10 @@ class DialogueProcessingAgent(LLMAgent):
                         if "type" not in segment:
                             segment["type"] = "dialogue"
                         if "text" not in segment and "dialogue" in segment:
-                            segment["text"] = segment["dialogue"]
+                            segment["text"] = segment.get("dialogue", "") # Use get with default
+                        # Ensure text is not None
+                        elif segment.get("text") is None:
+                            segment["text"] = ""
                         
                         # Ensure speaker consistency
                         if "speaker" in segment and isinstance(segment["speaker"], str):
@@ -127,7 +130,12 @@ class DialogueProcessingAgent(LLMAgent):
             except Exception as e:
                 st.error(f"Failed to parse dialogue processing response: {response[:300]}...")
                 st.error(f"Error: {str(e)}")
-                # Use original batch on error
-                all_processed.extend(batch)
+                # Use original batch on error, but normalize 'text' field first
+                normalized_batch = []
+                for seg in batch:
+                    if seg.get("text") is None:
+                        seg["text"] = ""
+                    normalized_batch.append(seg)
+                all_processed.extend(normalized_batch)
         
         return all_processed
