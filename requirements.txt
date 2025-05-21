@@ -1,0 +1,10 @@
+# Please run 'pip freeze > requirements.txt' in your development environment
+# to capture the exact versions of thedependencies.
+streamlit
+pandas
+json5
+tenacity
+docx2txt
+requests
+openai
+python-docx

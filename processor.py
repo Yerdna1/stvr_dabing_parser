@@ -8,7 +8,6 @@ import os
 import re
 import tempfile
 import json5  # More lenient JSON parser
-# import docling # Import docling - Commented out as library usage is unclear/non-functional
 import logging # Import logging
 from typing import Dict, List, Any, Optional, Callable
 from datetime import datetime
@@ -24,7 +23,6 @@ from agents.segmentation_agent import DocumentSegmentationAgent
 from agents.entity_agent import EntityRecognitionAgent
 from agents.dialogue_agent import DialogueProcessingAgent
 from agents.docx_export_agent import DocxExportAgent
-# Removed DoclingAgent import
 
 class ScreenplayProcessor:
     """Main processor that orchestrates the agents to parse and analyze a screenplay."""
@@ -316,6 +314,3 @@ class ScreenplayProcessor:
                 return super().default(o)
         
         return json.dumps(result, cls=DateTimeEncoder, ensure_ascii=False, indent=2)
-
-# Removed EnhancedScreenplayProcessor class and its methods
-# The base ScreenplayProcessor will now always be used.
